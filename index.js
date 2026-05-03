@@ -93,9 +93,18 @@ function getMainMenuKeyboard() {
   return {
     reply_markup: {
       keyboard: [
-        [{ text: '🎮 شروع بازی' }, { text: '💰 کیف پول' }],
-        [{ text: '🏆 دستاوردها' }, { text: '🛒 فروشگاه' }],
-        [{ text: '📊 آمار من' }, { text: '❓ راهنما' }]
+        [
+          { text: '🎮 شروع بازی', style: 'primary' },
+          { text: '💰 کیف پول', style: 'success' }
+        ],
+        [
+          { text: '🏆 دستاوردها', style: 'primary' },
+          { text: '🛒 فروشگاه', style: 'success' }
+        ],
+        [
+          { text: '📊 آمار من', style: 'primary' },
+          { text: '❓ راهنما', style: 'primary' }
+        ]
       ],
       resize_keyboard: true,
       persistent: true,
