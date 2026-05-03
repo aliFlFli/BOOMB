@@ -1,14 +1,28 @@
 const { Telegraf, Markup } = require('telegraf');
+const express = require('express');
 require('dotenv').config();
 
+// ================== BOT ==================
 const bot = new Telegraf(process.env.BOT_TOKEN);
 
+// ================== KEEP ALIVE SERVER ==================
+const app = express();
+
+app.get('/', (req, res) => {
+  res.send('💣 Minesweeper Bot is alive');
+});
+
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => {
+  console.log('🌐 Server running on', PORT);
+});
+
+// ================== GAME CONFIG ==================
 const SIZE = 5;
 const MINES = 5;
-
 const games = {};
 
-// ================== GAME ==================
+// ================== CREATE GAME ==================
 function createGame() {
   const size = SIZE * SIZE;
 
@@ -74,9 +88,7 @@ function render(game) {
         else text = game.numbers[idx] === 0 ? '▫️' : String(game.numbers[idx]);
       }
 
-      row.push(
-        Markup.button.callback(text, `m_${idx}`)
-      );
+      row.push(Markup.button.callback(text, `c_${idx}`));
     }
 
     rows.push(row);
@@ -85,7 +97,7 @@ function render(game) {
   return Markup.inlineKeyboard(rows);
 }
 
-// ================== EXPLOSION ANIMATION ==================
+// ================== EXPLOSION ==================
 async function explosion(ctx, game) {
   const frames = ['💣', '💥', '🔥', '💨', '💀'];
 
@@ -97,7 +109,7 @@ async function explosion(ctx, game) {
       );
     } catch (e) {}
 
-    await new Promise(r => setTimeout(r, 250));
+    await new Promise(r => setTimeout(r, 200));
   }
 }
 
@@ -106,28 +118,29 @@ bot.start((ctx) => {
   ctx.reply(
     `👋 خوش اومدی!
 
-💣 Minesweeper Bot
+💣 Minesweeper PRO
 
 🎮 شروع بازی:`,
     Markup.inlineKeyboard([
-      [Markup.button.callback('🚀 شروع بازی', 'start')]
+      [Markup.button.callback('🚀 شروع بازی', 'start_game')]
     ])
   );
 });
 
 // ================== START GAME ==================
-bot.action('start', (ctx) => {
+bot.action('start_game', (ctx) => {
   const chatId = ctx.chat.id;
 
   const game = createGame();
   games[chatId] = game;
 
   ctx.answerCbQuery();
+
   ctx.editMessageText('💣 بازی شروع شد!', render(game));
 });
 
 // ================== CLICK ==================
-bot.action(/m_(\d+)/, async (ctx) => {
+bot.action(/c_(\d+)/, async (ctx) => {
   const chatId = ctx.chat.id;
   const game = games[chatId];
 
@@ -148,7 +161,7 @@ bot.action(/m_(\d+)/, async (ctx) => {
     await explosion(ctx, game);
 
     return ctx.editMessageText(
-      '💥 باختی! روی مین رفتی',
+      '💥 باختی!',
       render(game)
     );
   }
@@ -171,8 +184,9 @@ bot.action(/m_(\d+)/, async (ctx) => {
 
 // ================== LAUNCH ==================
 bot.launch()
-  .then(() => console.log('💣 Minesweeper with Explosion Running'))
+  .then(() => console.log('💣 Minesweeper PRO Running'))
   .catch(console.error);
 
+// graceful shutdown
 process.once('SIGINT', () => bot.stop('SIGINT'));
 process.once('SIGTERM', () => bot.stop('SIGTERM'));
