@@ -679,4 +679,24 @@ bot.action('help', async (ctx) => {
 // ================== MEMORY CLEANUP ==================
 setInterval(() => {
   const now = Date.now();
-  for (let [chatId, game] of games.en
+  for (let [chatId, game] of games.entries()) {
+    if (now - game.startTime > 3600000) {
+      games.delete(chatId);
+    }
+  }
+}, 600000);
+
+// ================== ERROR HANDLING ==================
+bot.catch((err, ctx) => {
+  console.error('❌ Bot error:', err);
+  ctx.reply('⚠️ خطایی رخ داد. لطفاً /start کنید').catch(() => {});
+});
+
+// ================== LAUNCH ==================
+bot.launch()
+  .then(() => console.log('🚀 Minesweeper PRO v3.0 Running!'))
+  .catch(console.error);
+
+process.once('SIGINT', () => bot.stop('SIGINT'));
+process.once('SIGTERM', () => bot.stop('SIGTERM'));
+```
