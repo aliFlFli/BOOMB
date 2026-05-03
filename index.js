@@ -1,5 +1,6 @@
 const { Telegraf, Markup } = require('telegraf');
 const express = require('express');
+const Database = require('better-sqlite3');
 const fs = require('fs');
 require('dotenv').config();
 
@@ -13,31 +14,32 @@ const DIFFICULTY = {
 
 // ================== KEEP ALIVE ==================
 const app = express();
-app.get('/', (req, res) => res.send('🎮 Minesweeper PRO is alive'));
+app.get('/', (req, res) => res.send('🎮 Minesweeper PRO v4.0 is alive'));
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log('🌐 Server on', PORT));
 
-// ================== BOT INIT ==================
-const bot = new Telegraf(process.env.BOT_TOKEN);
-const games = new Map();
-let flagMode = new Map();
-
 // ================== DATABASE ==================
-let users = {};
+const db = new Database('minesweeper.db');
 
-try {
-  users = JSON.parse(fs.readFileSync('users.json', 'utf8'));
-} catch(e) { 
-  console.log('📁 New users file created'); 
-}
-
-function saveUsers() {
-  fs.writeFileSync('users.json', JSON.stringify(users, null, 2));
-}
+db.exec(`
+  CREATE TABLE IF NOT EXISTS users (
+    user_id INTEGER PRIMARY KEY,
+    coins INTEGER DEFAULT 100,
+    wins INTEGER DEFAULT 0,
+    losses INTEGER DEFAULT 0,
+    games_played INTEGER DEFAULT 0,
+    best_time INTEGER,
+    achievements TEXT DEFAULT '[]',
+    inventory TEXT DEFAULT '{}'
+  )
+`);
 
 function getUser(userId) {
-  if (!users[userId]) {
-    users[userId] = {
+  const row = db.prepare('SELECT * FROM users WHERE user_id = ?').get(userId);
+  if (!row) {
+    db.prepare('INSERT INTO users (user_id) VALUES (?)').run(userId);
+    return {
+      userId,
       coins: 100,
       wins: 0,
       losses: 0,
@@ -46,36 +48,65 @@ function getUser(userId) {
       achievements: [],
       inventory: {}
     };
-    saveUsers();
   }
-  return users[userId];
+  return {
+    userId: row.user_id,
+    coins: row.coins,
+    wins: row.wins,
+    losses: row.losses,
+    gamesPlayed: row.games_played,
+    bestTime: row.best_time,
+    achievements: JSON.parse(row.achievements),
+    inventory: JSON.parse(row.inventory)
+  };
 }
 
-function addCoin(userId, amount) {
-  const user = getUser(userId);
-  user.coins += amount;
-  saveUsers();
+function updateUser(user) {
+  db.prepare(`
+    UPDATE users SET 
+      coins = ?, 
+      wins = ?, 
+      losses = ?, 
+      games_played = ?, 
+      best_time = ?, 
+      achievements = ?, 
+      inventory = ?
+    WHERE user_id = ?
+  `).run(
+    user.coins,
+    user.wins,
+    user.losses,
+    user.gamesPlayed,
+    user.bestTime,
+    JSON.stringify(user.achievements),
+    JSON.stringify(user.inventory),
+    user.userId
+  );
 }
+
+// ================== BOT INIT ==================
+const bot = new Telegraf(process.env.BOT_TOKEN);
+const games = new Map();
+let flagMode = new Map();
 
 // ================== ACHIEVEMENTS ==================
 const ACHIEVEMENTS = {
   FIRST_WIN: { name: '🏆 اولین برد', desc: 'اولین بازی رو ببر', coin: 50 },
   EXPERT: { name: '🎖️ حرفه‌ای', desc: 'سطح حرفه‌ای رو ببر', coin: 200 },
   SPEEDRUN: { name: '⚡ سرعت', desc: 'زیر ۳۰ ثانیه ببر', coin: 100 },
-  PERFECT: { name: '💎 کامل', desc: 'بدون اشتباه ببر', coin: 150 },
+  PERFECT: { name: '💎 کامل', desc: 'بدون اشتباه ببر (فقط کلیک‌های ضروری)', coin: 150 },
   LUCKY: { name: '🍀 خوش شانس', desc: 'با ۱ حرکت ببر', coin: 500 }
 };
 
 function checkAchievement(userId, type, gameData) {
   const user = getUser(userId);
-  const achievement = ACHIEVEMENTS[type];
   
   if (user.achievements.includes(type)) return false;
   
   let earned = false;
   switch(type) {
     case 'FIRST_WIN':
-      earned = user.wins === 1;
+      earned = user.wins === 0;
       break;
     case 'EXPERT':
       earned = gameData.difficulty === 'expert';
@@ -93,17 +124,17 @@ function checkAchievement(userId, type, gameData) {
   
   if (earned) {
     user.achievements.push(type);
-    user.coins += achievement.coin;
-    saveUsers();
-    return achievement;
+    user.coins += ACHIEVEMENTS[type].coin;
+    updateUser(user);
+    return ACHIEVEMENTS[type];
   }
   return false;
 }
 
 // ================== SHOP ==================
 const SHOP = {
-  bomb_disabler: { name: '💣 مین‌شکن', desc: 'یه مین رو نابود کن', price: 50, type: 'consumable' },
-  extra_life: { name: '❤️ جان اضافه', desc: 'یه بار میتونی اشتباه کنی', price: 75, type: 'consumable' }
+  bomb_disabler: { name: '💣 مین‌شکن', desc: 'یه مین رو نابود کن', price: 50 },
+  extra_life: { name: '❤️ جان اضافه', desc: 'یه بار میتونی اشتباه کنی', price: 75 }
 };
 
 // ================== GAME CLASS ==================
@@ -120,6 +151,7 @@ class MinesweeperGame {
     this.opened = 0;
     this.startTime = Date.now();
     this.moves = 0;
+    this.actualClicks = 0;
     this.flaggedCount = 0;
     this.extraLifeUsed = false;
     
@@ -128,13 +160,13 @@ class MinesweeperGame {
   }
   
   placeMines() {
-    let placed = 0;
-    while (placed < this.minesCount) {
-      const idx = Math.floor(Math.random() * this.totalCells);
-      if (this.board[idx] !== '💣') {
-        this.board[idx] = '💣';
-        placed++;
-      }
+    const indices = Array.from({length: this.totalCells}, (_, i) => i);
+    for (let i = indices.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [indices[i], indices[j]] = [indices[j], indices[i]];
+    }
+    for (let i = 0; i < this.minesCount; i++) {
+      this.board[indices[i]] = '💣';
     }
   }
   
@@ -159,25 +191,33 @@ class MinesweeperGame {
     }
   }
   
-  revealEmpty(idx) {
-    if (this.revealed[idx] || this.flags[idx]) return;
+  revealEmpty(startIdx) {
+    const queue = [startIdx];
+    const visited = new Set();
     
-    this.revealed[idx] = true;
-    this.opened++;
-    
-    if (this.board[idx] !== 0) return;
-    
-    const x = Math.floor(idx / this.size);
-    const y = idx % this.size;
-    
-    for (let dx = -1; dx <= 1; dx++) {
-      for (let dy = -1; dy <= 1; dy++) {
-        const nx = x + dx;
-        const ny = y + dy;
-        if (nx >= 0 && nx < this.size && ny >= 0 && ny < this.size) {
-          const neighborIdx = nx * this.size + ny;
-          if (!this.revealed[neighborIdx] && this.board[neighborIdx] !== '💣') {
-            this.revealEmpty(neighborIdx);
+    while (queue.length > 0) {
+      const idx = queue.shift();
+      if (visited.has(idx)) continue;
+      if (this.revealed[idx] || this.flags[idx]) continue;
+      
+      visited.add(idx);
+      this.revealed[idx] = true;
+      this.opened++;
+      
+      if (this.board[idx] !== 0) continue;
+      
+      const x = Math.floor(idx / this.size);
+      const y = idx % this.size;
+      
+      for (let dx = -1; dx <= 1; dx++) {
+        for (let dy = -1; dy <= 1; dy++) {
+          const nx = x + dx;
+          const ny = y + dy;
+          if (nx >= 0 && nx < this.size && ny >= 0 && ny < this.size) {
+            const neighborIdx = nx * this.size + ny;
+            if (!this.revealed[neighborIdx] && !this.flags[neighborIdx] && this.board[neighborIdx] !== '💣') {
+              queue.push(neighborIdx);
+            }
           }
         }
       }
@@ -190,6 +230,16 @@ class MinesweeperGame {
         this.revealed[i] = true;
       }
     }
+  }
+  
+  disableMine(idx) {
+    if (this.board[idx] === '💣') {
+      this.board[idx] = 0;
+      this.minesCount--;
+      this.calculateNumbers();
+      return true;
+    }
+    return false;
   }
   
   checkWin() {
@@ -271,15 +321,29 @@ async function handleCellClick(ctx, game, idx) {
     return false;
   }
   
+  const user = getUser(userId);
+  
+  // Check bomb disabler
+  if (game.board[idx] === '💣' && user.inventory?.bomb_disabler > 0) {
+    user.inventory.bomb_disabler--;
+    updateUser(user);
+    game.disableMine(idx);
+    await ctx.answerCbQuery('💣 مین با مین‌شکن خنثی شد! -۵۰ سکه');
+    await ctx.editMessageText(
+      `💣 ${DIFFICULTY[game.difficulty]?.name || ''}\n💣 مین خنثی شد!\n${game.getStats()}`,
+      renderGame(game, false)
+    );
+    return true;
+  }
+  
+  game.actualClicks++;
   game.moves++;
   
   if (game.board[idx] === '💣') {
-    const user = getUser(userId);
-    
     if (user.inventory?.extra_life > 0 && !game.extraLifeUsed) {
       game.extraLifeUsed = true;
       user.inventory.extra_life--;
-      saveUsers();
+      updateUser(user);
       await ctx.answerCbQuery('❤️ جان اضافه استفاده شد!');
       await ctx.editMessageText(
         `💣 ${DIFFICULTY[game.difficulty]?.name || ''}\n❤️ جان اضافه فعال شد!\n${game.getStats()}`,
@@ -293,7 +357,7 @@ async function handleCellClick(ctx, game, idx) {
     
     user.losses++;
     user.gamesPlayed++;
-    saveUsers();
+    updateUser(user);
     
     await ctx.editMessageText(
       `💥 باختی! 💀\n\n${game.getStats()}\n💰 سکه: ${user.coins}`,
@@ -306,31 +370,37 @@ async function handleCellClick(ctx, game, idx) {
   
   if (game.checkWin()) {
     game.alive = false;
-    const user = getUser(userId);
     const gameTime = game.getTimeInSeconds();
     
-    user.wins++;
-    user.gamesPlayed++;
     const coinReward = DIFFICULTY[game.difficulty].coin;
     user.coins += coinReward;
+    user.wins++;
+    user.gamesPlayed++;
     
     if (!user.bestTime || gameTime < user.bestTime) {
       user.bestTime = gameTime;
     }
     
-    saveUsers();
+    updateUser(user);
     
-    const achievement = checkAchievement(userId, 'FIRST_WIN', { difficulty: game.difficulty, time: gameTime, moves: game.moves, safeCells: game.totalCells - game.minesCount });
-    const expertAch = checkAchievement(userId, 'EXPERT', { difficulty: game.difficulty, time: gameTime, moves: game.moves, safeCells: game.totalCells - game.minesCount });
-    const speedAch = checkAchievement(userId, 'SPEEDRUN', { difficulty: game.difficulty, time: gameTime, moves: game.moves, safeCells: game.totalCells - game.minesCount });
+    const achievements = [];
+    const firstWin = checkAchievement(userId, 'FIRST_WIN', { difficulty: game.difficulty, time: gameTime, moves: game.actualClicks, safeCells: game.totalCells - game.minesCount });
+    const expertAch = checkAchievement(userId, 'EXPERT', { difficulty: game.difficulty, time: gameTime, moves: game.actualClicks, safeCells: game.totalCells - game.minesCount });
+    const speedAch = checkAchievement(userId, 'SPEEDRUN', { difficulty: game.difficulty, time: gameTime, moves: game.actualClicks, safeCells: game.totalCells - game.minesCount });
+    const perfectAch = checkAchievement(userId, 'PERFECT', { difficulty: game.difficulty, time: gameTime, moves: game.actualClicks, safeCells: game.totalCells - game.minesCount });
+    
+    if (firstWin) achievements.push(firstWin);
+    if (expertAch) achievements.push(expertAch);
+    if (speedAch) achievements.push(speedAch);
+    if (perfectAch) achievements.push(perfectAch);
     
     let achievementMsg = '';
-    if (achievement) achievementMsg += `\n\n🏆 ${achievement.name} +${achievement.coin} سکه!`;
-    if (expertAch) achievementMsg += `\n🏆 ${expertAch.name} +${expertAch.coin} سکه!`;
-    if (speedAch) achievementMsg += `\n🏆 ${speedAch.name} +${speedAch.coin} سکه!`;
+    achievements.forEach(ach => {
+      achievementMsg += `\n🏆 ${ach.name} +${ach.coin} سکه!`;
+    });
     
     await ctx.editMessageText(
-      `🎉 بردی! 🎉\n⏱️ زمان: ${gameTime} ثانیه\n🎯 حرکت: ${game.moves}\n💰 +${coinReward} سکه${achievementMsg}\n📊 کل سکه: ${user.coins}`,
+      `🎉 بردی! 🎉\n⏱️ زمان: ${gameTime} ثانیه\n🎯 حرکت: ${game.actualClicks}\n💰 +${coinReward} سکه${achievementMsg}\n📊 کل سکه: ${user.coins}`,
       renderGame(game, true)
     );
     return true;
@@ -386,7 +456,7 @@ bot.start(async (ctx) => {
   ]);
   
   await ctx.reply(
-    `🎯 به Minesweeper PRO خوش اومدی!\n\n` +
+    `🎯 به Minesweeper PRO v4.0 خوش اومدی!\n\n` +
     `👤 ${ctx.from.first_name}\n` +
     `💰 سکه: ${user.coins}\n` +
     `🏆 برد: ${user.wins} | باخت: ${user.losses}\n\n` +
@@ -430,7 +500,7 @@ bot.action('main_menu', async (ctx) => {
   ]);
   
   await ctx.editMessageText(
-    `🎯 منوی اصلی Minesweeper PRO\n\n` +
+    `🎯 منوی اصلی Minesweeper PRO v4.0\n\n` +
     `👤 ${ctx.from.first_name}\n` +
     `💰 سکه: ${user.coins}\n` +
     `🏆 برد: ${user.wins} | باخت: ${user.losses}\n\n` +
@@ -529,7 +599,7 @@ bot.action('auto_reveal', async (ctx) => {
       user.coins += coinReward;
       user.wins++;
       user.gamesPlayed++;
-      saveUsers();
+      updateUser(user);
       
       await ctx.editMessageText(
         `🎉 بردی! 🎉\n💰 +${coinReward} سکه\n${game.getStats()}`,
@@ -619,7 +689,7 @@ bot.action('buy_bomb_disabler', async (ctx) => {
     user.coins -= 50;
     if (!user.inventory) user.inventory = {};
     user.inventory.bomb_disabler = (user.inventory.bomb_disabler || 0) + 1;
-    saveUsers();
+    updateUser(user);
     await ctx.answerCbQuery('✅ مین‌شکن خریداری شد!', true);
     
     const game = games.get(chatId);
@@ -642,7 +712,7 @@ bot.action('buy_extra_life', async (ctx) => {
     user.coins -= 75;
     if (!user.inventory) user.inventory = {};
     user.inventory.extra_life = (user.inventory.extra_life || 0) + 1;
-    saveUsers();
+    updateUser(user);
     await ctx.answerCbQuery('❤️ جان اضافه خریداری شد!', true);
     
     const game = games.get(chatId);
@@ -659,7 +729,7 @@ bot.action('buy_extra_life', async (ctx) => {
 
 bot.action('help', async (ctx) => {
   await ctx.editMessageText(
-    `📖 راهنمای بازی:\n\n` +
+    `📖 راهنمای بازی v4.0:\n\n` +
     `🎯 هدف: همه سلول‌های بدون مین رو باز کن\n\n` +
     `🕹️ کنترل‌ها:\n` +
     `• کلیک عادی: باز کردن سلول\n` +
@@ -670,8 +740,14 @@ bot.action('help', async (ctx) => {
     `💰 سیستم جایزه:\n` +
     `• برد در هر سطح: سکه میگیری\n` +
     `• دستاوردها: سکه اضافه\n` +
-    `• فروشگاه: آیتم بخر (مین‌شکن و جان اضافه)\n\n` +
-    `💡 نکته: بعد از تموم شدن بازی، فقط دکمه New Game و Menu کار میکنن`,
+    `• فروشگاه: آیتم بخر\n` +
+    `   - 💣 مین‌شکن: یه مین رو نابود کن\n` +
+    `   - ❤️ جان اضافه: یه اشتباه رو ببخش\n\n` +
+    `💡 نکات جدید v4.0:\n` +
+    `• مین‌شکن الان کار میکنه! 🔥\n` +
+    `• دیتابیس SQLite برای ذخیره‌سازی بهتر\n` +
+    `• دستاورد PERFECT اصلاح شد\n` +
+    `• بهینه‌سازی عملکرد`,
     Markup.inlineKeyboard([Markup.button.callback('🔙 برگشت به منو', 'main_menu')])
   );
 });
@@ -694,7 +770,7 @@ bot.catch((err, ctx) => {
 
 // ================== LAUNCH ==================
 bot.launch()
-  .then(() => console.log('🚀 Minesweeper PRO v3.0 Running!'))
+  .then(() => console.log('🚀 Minesweeper PRO v4.0 Running!'))
   .catch(console.error);
 
 process.once('SIGINT', () => bot.stop('SIGINT'));
