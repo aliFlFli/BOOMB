@@ -105,7 +105,7 @@ function getMainMenuKeyboard() {
           { text: '📊 آمار من', style: 'primary' }
         ],
         [
-          { text: '❓ راهنما', style: 'primary' }
+          { text: '❓ راهنما', style: 'danger' }
         ]
       ],
       resize_keyboard: true,
