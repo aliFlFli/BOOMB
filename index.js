@@ -94,15 +94,17 @@ function getMainMenuKeyboard() {
     reply_markup: {
       keyboard: [
         [
-          { text: '🎮 شروع بازی', style: 'primary' },
-          { text: '💰 کیف پول', style: 'success' }
+          { text: '🎮 شروع بازی', style: 'primary' }
         ],
         [
-          { text: '🏆 دستاوردها', style: 'primary' },
+          { text: '💰 کیف پول', style: 'success' },
           { text: '🛒 فروشگاه', style: 'success' }
         ],
         [
-          { text: '📊 آمار من', style: 'primary' },
+          { text: '🏆 دستاوردها', style: 'primary' },
+          { text: '📊 آمار من', style: 'primary' }
+        ],
+        [
           { text: '❓ راهنما', style: 'primary' }
         ]
       ],
