@@ -1,21 +1,34 @@
 const { Telegraf, Markup } = require('telegraf');
+const express = require('express');
 require('dotenv').config();
 
 const bot = new Telegraf(process.env.BOT_TOKEN);
 
+// ================== KEEP ALIVE SERVER ==================
+const app = express();
+
+app.get('/', (req, res) => {
+  res.send('💣 Bot is alive');
+});
+
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => {
+  console.log('🌐 Server running on port', PORT);
+});
+
+// ================== GAME ==================
 const SIZE = 5;
 const MINES = 5;
 
 const games = {};
 
-// ================== ساخت بازی ==================
+// ساخت بازی
 function createGame() {
   const size = SIZE * SIZE;
 
   const board = Array(size).fill(0);
   const revealed = Array(size).fill(false);
 
-  // مین‌ها
   let placed = 0;
   while (placed < MINES) {
     const i = Math.floor(Math.random() * size);
@@ -25,7 +38,6 @@ function createGame() {
     }
   }
 
-  // شمارش اطراف
   function count(x, y) {
     let c = 0;
 
@@ -59,7 +71,7 @@ function createGame() {
   };
 }
 
-// ================== UI ==================
+// UI
 function render(game) {
   const rows = [];
 
@@ -72,16 +84,11 @@ function render(game) {
       let text = '⬜️';
 
       if (game.revealed[idx]) {
-        if (game.board[idx] === '💣') {
-          text = '💣';
-        } else {
-          text = game.numbers[idx] === 0 ? '▫️' : String(game.numbers[idx]);
-        }
+        if (game.board[idx] === '💣') text = '💣';
+        else text = game.numbers[idx] === 0 ? '▫️' : String(game.numbers[idx]);
       }
 
-      row.push(
-        Markup.button.callback(text, `m_${idx}`)
-      );
+      row.push(Markup.button.callback(text, `m_${idx}`));
     }
 
     rows.push(row);
@@ -90,14 +97,14 @@ function render(game) {
   return Markup.inlineKeyboard(rows);
 }
 
-// ================== START MENU ==================
+// ================== START ==================
 bot.start((ctx) => {
   ctx.reply(
-    `👋 سلام!
+    `👋 خوش اومدی!
 
-💣 به Minesweeper Bot خوش اومدی
+💣 Minesweeper Bot
 
-🎮 برای شروع بازی روی دکمه زیر بزن`,
+🎮 برای شروع روی دکمه بزن`,
     Markup.inlineKeyboard([
       [Markup.button.callback('🎮 شروع بازی', 'start_game')]
     ])
@@ -106,27 +113,30 @@ bot.start((ctx) => {
 
 // ================== START GAME ==================
 bot.action('start_game', (ctx) => {
+  const chatId = ctx.callbackQuery.message.chat.id;
+
   const game = createGame();
+  games[chatId] = game;
 
-  games[ctx.chat.id] = game;
+  ctx.answerCbQuery();
 
-  ctx.editMessageText(
-    '💣 بازی شروع شد!\n\nروی خانه‌ها کلیک کن',
-    render(game)
-  );
+  ctx.editMessageText('💣 بازی شروع شد!', render(game));
 });
 
 // ================== CLICK ==================
-bot.action(/m_(\d+)/, async (ctx) => {
-  const game = games[ctx.chat.id];
+bot.action(/m_(\d+)/, (ctx) => {
+  const chatId = ctx.callbackQuery.message.chat.id;
+  const game = games[chatId];
 
-  if (!game || !game.alive)
+  if (!game || !game.alive) {
     return ctx.answerCbQuery('بازی فعال نیست');
+  }
 
   const idx = +ctx.match[1];
 
-  if (game.revealed[idx])
+  if (game.revealed[idx]) {
     return ctx.answerCbQuery('قبلاً باز شده');
+  }
 
   game.revealed[idx] = true;
 
@@ -135,7 +145,7 @@ bot.action(/m_(\d+)/, async (ctx) => {
     game.alive = false;
 
     return ctx.editMessageText(
-      '💥 باختی! روی مین رفتی',
+      '💥 باختی!',
       render(game)
     );
   }
@@ -147,7 +157,7 @@ bot.action(/m_(\d+)/, async (ctx) => {
     game.alive = false;
 
     return ctx.editMessageText(
-      '🎉 بردی! همه خونه‌های امن رو باز کردی',
+      '🎉 بردی!',
       render(game)
     );
   }
@@ -156,18 +166,11 @@ bot.action(/m_(\d+)/, async (ctx) => {
   ctx.answerCbQuery();
 });
 
-// ================== RESTART ==================
-bot.action('restart', (ctx) => {
-  const game = createGame();
-  games[ctx.chat.id] = game;
-
-  ctx.editMessageText('🔄 بازی جدید شروع شد', render(game));
-});
-
-// ================== START BOT ==================
+// ================== LAUNCH SAFE ==================
 bot.launch()
   .then(() => console.log('💣 Minesweeper Bot Running...'))
-  .catch(console.error);
+  .catch((err) => console.error('BOT ERROR:', err));
 
+// جلوگیری از خاموش شدن
 process.once('SIGINT', () => bot.stop('SIGINT'));
 process.once('SIGTERM', () => bot.stop('SIGTERM'));
