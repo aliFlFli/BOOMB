@@ -75,7 +75,7 @@ function render(game) {
         if (game.board[idx] === '💣') {
           text = '💣';
         } else {
-          text = game.numbers[idx] === 0 ? '▫️' : String(game.numbers[idx]);
+          text = game.numbers[idx] === 0 ? '🟢' : String(game.numbers[idx]);
         }
       }
 
