@@ -2,9 +2,9 @@
   "name": "minesweeper-pro",
   "version": "3.0.0",
   "description": "Minesweeper game bot for Telegram",
-  "main": "bot.js",
+  "main": "index.js",
   "scripts": {
-    "start": "node bot.js"
+    "start": "node index.js"
   },
   "dependencies": {
     "telegraf": "^4.12.2",
