@@ -1,13 +1,13 @@
 {
   "name": "minesweeper-pro",
-  "version": "4.0.0",
+  "version": "4.1.0",
   "description": "Minesweeper game bot for Telegram - Professional Edition",
   "main": "index.js",
   "scripts": {
     "start": "node index.js"
   },
   "dependencies": {
-    "telegraf": "^5.12.2",
+    "telegraf": "4.15.3",
     "express": "^4.18.2",
     "dotenv": "^16.0.3",
     "better-sqlite3": "^9.0.0"
