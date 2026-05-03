@@ -1,7 +1,6 @@
 const { Telegraf, Markup } = require('telegraf');
 const express = require('express');
 const Database = require('better-sqlite3');
-const fs = require('fs');
 require('dotenv').config();
 
 // ================== CONFIG ==================
@@ -14,7 +13,7 @@ const DIFFICULTY = {
 
 // ================== KEEP ALIVE ==================
 const app = express();
-app.get('/', (req, res) => res.send('🎮 Minesweeper PRO v4.0 is alive'));
+app.get('/', (req, res) => res.send('🎮 Minesweeper PRO v4.1 is alive'));
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log('🌐 Server on', PORT));
 
@@ -88,6 +87,26 @@ function updateUser(user) {
 const bot = new Telegraf(process.env.BOT_TOKEN);
 const games = new Map();
 let flagMode = new Map();
+
+// ================== PERMANENT MENU KEYBOARD ==================
+function getMainMenuKeyboard() {
+  return Markup.keyboard([
+    [
+      Markup.button.text('🎮 شروع بازی', undefined, { style: 'primary' }),
+      Markup.button.text('💰 کیف پول', undefined, { style: 'success' })
+    ],
+    [
+      Markup.button.text('🏆 دستاوردها', undefined, { style: 'primary' }),
+      Markup.button.text('🛒 فروشگاه', undefined, { style: 'success' })
+    ],
+    [
+      Markup.button.text('📊 آمار من', undefined, { style: 'primary' }),
+      Markup.button.text('❓ راهنما', undefined, { style: 'primary' })
+    ]
+  ])
+  .resizeKeyboard(true)
+  .persistent(true);  // کیبورد همیشه پایین صفحه میمونه
+}
 
 // ================== ACHIEVEMENTS ==================
 const ACHIEVEMENTS = {
@@ -328,7 +347,7 @@ async function handleCellClick(ctx, game, idx) {
     user.inventory.bomb_disabler--;
     updateUser(user);
     game.disableMine(idx);
-    await ctx.answerCbQuery('💣 مین با مین‌شکن خنثی شد! -۵۰ سکه');
+    await ctx.answerCbQuery('💣 مین با مین‌شکن خنثی شد!');
     await ctx.editMessageText(
       `💣 ${DIFFICULTY[game.difficulty]?.name || ''}\n💣 مین خنثی شد!\n${game.getStats()}`,
       renderGame(game, false)
@@ -441,27 +460,133 @@ async function handleFlag(ctx, game, idx) {
   return true;
 }
 
+// ================== TEXT MESSAGE HANDLERS (برای منوی دائمی) ==================
+bot.hears('🎮 شروع بازی', (ctx) => {
+  const keyboard = Markup.inlineKeyboard([
+    [Markup.button.callback('🍃 آسان (۱۰ سکه)', 'difficulty_easy')],
+    [Markup.button.callback('⚙️ معمولی (۲۵ سکه)', 'difficulty_normal')],
+    [Markup.button.callback('🔥 سخت (۵۰ سکه)', 'difficulty_hard')],
+    [Markup.button.callback('💀 حرفه‌ای (۱۰۰ سکه)', 'difficulty_expert')],
+    [Markup.button.callback('🔙 برگشت', 'back_to_menu')]
+  ]);
+  
+  ctx.reply('🎲 سطح سختی رو انتخاب کن:', keyboard);
+});
+
+bot.hears('💰 کیف پول', async (ctx) => {
+  const user = getUser(ctx.from.id);
+  await ctx.reply(
+    `💰 کیف پول شما\n\n` +
+    `سکه: ${user.coins} 🪙\n\n` +
+    `🎮 هر برد: +${DIFFICULTY.easy.coin}-${DIFFICULTY.expert.coin} سکه\n` +
+    `🏆 دستاوردها: سکه اضافه میدن`,
+    Markup.inlineKeyboard([Markup.button.callback('🔙 برگشت', 'back_to_menu')])
+  );
+});
+
+bot.hears('🏆 دستاوردها', async (ctx) => {
+  const user = getUser(ctx.from.id);
+  let msg = '🏆 دستاوردهای شما:\n\n';
+  
+  for (const [key, ach] of Object.entries(ACHIEVEMENTS)) {
+    const earned = user.achievements.includes(key);
+    msg += `${earned ? '✅' : '🔒'} ${ach.name}\n`;
+    msg += `   ${ach.desc} (+${ach.coin} سکه)\n\n`;
+  }
+  
+  await ctx.reply(msg, Markup.inlineKeyboard([Markup.button.callback('🔙 برگشت', 'back_to_menu')]));
+});
+
+bot.hears('🛒 فروشگاه', async (ctx) => {
+  const user = getUser(ctx.from.id);
+  let msg = '🛒 فروشگاه آیتم‌ها:\n\n';
+  
+  for (const [key, item] of Object.entries(SHOP)) {
+    msg += `${item.name}\n`;
+    msg += `   ${item.desc}\n`;
+    msg += `   💰 ${item.price} سکه\n`;
+    if (user.inventory?.[key]) {
+      msg += `   📦 موجودی: ${user.inventory[key]}\n`;
+    }
+    msg += `\n`;
+  }
+  
+  const keyboard = Markup.inlineKeyboard([
+    [Markup.button.callback('💣 خرید مین‌شکن (۵۰)', 'buy_bomb_disabler')],
+    [Markup.button.callback('❤️ خرید جان اضافه (۷۵)', 'buy_extra_life')],
+    [Markup.button.callback('🔙 برگشت', 'back_to_menu')]
+  ]);
+  
+  await ctx.reply(msg, keyboard);
+});
+
+bot.hears('📊 آمار من', async (ctx) => {
+  const user = getUser(ctx.from.id);
+  const winRate = user.gamesPlayed > 0 ? ((user.wins / user.gamesPlayed) * 100).toFixed(1) : 0;
+  
+  await ctx.reply(
+    `📊 آمار شما:\n\n` +
+    `🎮 بازی‌ها: ${user.gamesPlayed}\n` +
+    `🏆 برد: ${user.wins}\n` +
+    `💀 باخت: ${user.losses}\n` +
+    `📈 نرخ برد: ${winRate}%\n` +
+    `💰 سکه: ${user.coins}\n` +
+    `⚡ بهترین زمان: ${user.bestTime || '-'} ثانیه\n` +
+    `🏅 دستاوردها: ${user.achievements.length}/${Object.keys(ACHIEVEMENTS).length}`,
+    Markup.inlineKeyboard([Markup.button.callback('🔙 برگشت', 'back_to_menu')])
+  );
+});
+
+bot.hears('❓ راهنما', async (ctx) => {
+  await ctx.reply(
+    `📖 راهنمای بازی v4.1:\n\n` +
+    `🎯 هدف: همه سلول‌های بدون مین رو باز کن\n\n` +
+    `🕹️ کنترل‌ها:\n` +
+    `• کلیک عادی: باز کردن سلول\n` +
+    `• حالت 🚩 Flag: پرچم گذاری روی مین\n` +
+    `• دکمه 🔍 Auto: باز کردن خودکار خانه‌های امن\n` +
+    `• دکمه 🔄 New: بازی جدید با همون سطح\n` +
+    `• دکمه 🏠 Menu: برگشت به منوی اصلی\n\n` +
+    `💰 سیستم جایزه:\n` +
+    `• برد در هر سطح: سکه میگیری\n` +
+    `• دستاوردها: سکه اضافه\n` +
+    `• فروشگاه: آیتم بخر\n` +
+    `   - 💣 مین‌شکن: یه مین رو نابود کن\n` +
+    `   - ❤️ جان اضافه: یه اشتباه رو ببخش\n\n` +
+    `💡 نکات جدید v4.1:\n` +
+    `• منوی رنگی همیشه پایین صفحه! 🎨\n` +
+    `• دکمه‌های آبی، سبز و قرمز\n` +
+    `• بدون نیاز به تایپ /start`,
+    Markup.inlineKeyboard([Markup.button.callback('🔙 برگشت', 'back_to_menu')])
+  );
+});
+
 // ================== BOT COMMANDS ==================
 bot.start(async (ctx) => {
   const userId = ctx.from.id;
   const user = getUser(userId);
   
-  const keyboard = Markup.inlineKeyboard([
-    [Markup.button.callback('🎮 شروع بازی', 'new_game')],
-    [Markup.button.callback('💰 کیف پول', 'wallet')],
-    [Markup.button.callback('🏆 دستاوردها', 'achievements')],
-    [Markup.button.callback('🛒 فروشگاه', 'shop_menu')],
-    [Markup.button.callback('📊 آمار من', 'my_stats')],
-    [Markup.button.callback('❓ راهنما', 'help')]
-  ]);
-  
+  // ارسال منوی اصلی با کیبورد رنگی دائمی
   await ctx.reply(
-    `🎯 به Minesweeper PRO v4.0 خوش اومدی!\n\n` +
+    `🎯 به Minesweeper PRO v4.1 خوش اومدی!\n\n` +
     `👤 ${ctx.from.first_name}\n` +
     `💰 سکه: ${user.coins}\n` +
     `🏆 برد: ${user.wins} | باخت: ${user.losses}\n\n` +
-    `⚡ با بردن بازی سکه بگیر و از فروشگاه آیتم بخر!`,
-    keyboard
+    `⚡ از دکمه‌های رنگی زیر استفاده کن!`,
+    getMainMenuKeyboard()
+  );
+});
+
+bot.action('back_to_menu', async (ctx) => {
+  const userId = ctx.from.id;
+  const user = getUser(userId);
+  
+  await ctx.editMessageText(
+    `🎯 منوی اصلی Minesweeper PRO\n\n` +
+    `👤 ${ctx.from.first_name}\n` +
+    `💰 سکه: ${user.coins}\n` +
+    `🏆 برد: ${user.wins} | باخت: ${user.losses}`,
+    getMainMenuKeyboard()
   );
 });
 
@@ -471,7 +596,7 @@ bot.action('new_game', (ctx) => {
     [Markup.button.callback('⚙️ معمولی (۲۵ سکه)', 'difficulty_normal')],
     [Markup.button.callback('🔥 سخت (۵۰ سکه)', 'difficulty_hard')],
     [Markup.button.callback('💀 حرفه‌ای (۱۰۰ سکه)', 'difficulty_expert')],
-    [Markup.button.callback('🔙 برگشت به منو', 'main_menu')]
+    [Markup.button.callback('🔙 برگشت به منو', 'back_to_menu')]
   ]);
   
   const chatId = ctx.chat.id;
@@ -490,22 +615,12 @@ bot.action('main_menu', async (ctx) => {
   games.delete(chatId);
   flagMode.delete(chatId);
   
-  const keyboard = Markup.inlineKeyboard([
-    [Markup.button.callback('🎮 شروع بازی', 'new_game')],
-    [Markup.button.callback('💰 کیف پول', 'wallet')],
-    [Markup.button.callback('🏆 دستاوردها', 'achievements')],
-    [Markup.button.callback('🛒 فروشگاه', 'shop_menu')],
-    [Markup.button.callback('📊 آمار من', 'my_stats')],
-    [Markup.button.callback('❓ راهنما', 'help')]
-  ]);
-  
   await ctx.editMessageText(
-    `🎯 منوی اصلی Minesweeper PRO v4.0\n\n` +
+    `🎯 منوی اصلی Minesweeper PRO\n\n` +
     `👤 ${ctx.from.first_name}\n` +
     `💰 سکه: ${user.coins}\n` +
-    `🏆 برد: ${user.wins} | باخت: ${user.losses}\n\n` +
-    `⚡ با بردن بازی سکه بگیر!`,
-    keyboard
+    `🏆 برد: ${user.wins} | باخت: ${user.losses}`,
+    getMainMenuKeyboard()
   );
 });
 
@@ -617,47 +732,6 @@ bot.action('auto_reveal', async (ctx) => {
   }
 });
 
-bot.action('wallet', async (ctx) => {
-  const user = getUser(ctx.from.id);
-  await ctx.editMessageText(
-    `💰 کیف پول شما\n\n` +
-    `سکه: ${user.coins} 🪙\n\n` +
-    `🎮 هر برد: +${DIFFICULTY.easy.coin}-${DIFFICULTY.expert.coin} سکه\n` +
-    `🏆 دستاوردها: سکه اضافه میدن`,
-    Markup.inlineKeyboard([Markup.button.callback('🔙 برگشت به منو', 'main_menu')])
-  );
-});
-
-bot.action('achievements', async (ctx) => {
-  const user = getUser(ctx.from.id);
-  let msg = '🏆 دستاوردهای شما:\n\n';
-  
-  for (const [key, ach] of Object.entries(ACHIEVEMENTS)) {
-    const earned = user.achievements.includes(key);
-    msg += `${earned ? '✅' : '🔒'} ${ach.name}\n`;
-    msg += `   ${ach.desc} (+${ach.coin} سکه)\n\n`;
-  }
-  
-  await ctx.editMessageText(msg, Markup.inlineKeyboard([Markup.button.callback('🔙 برگشت به منو', 'main_menu')]));
-});
-
-bot.action('my_stats', async (ctx) => {
-  const user = getUser(ctx.from.id);
-  const winRate = user.gamesPlayed > 0 ? ((user.wins / user.gamesPlayed) * 100).toFixed(1) : 0;
-  
-  await ctx.editMessageText(
-    `📊 آمار شما:\n\n` +
-    `🎮 بازی‌ها: ${user.gamesPlayed}\n` +
-    `🏆 برد: ${user.wins}\n` +
-    `💀 باخت: ${user.losses}\n` +
-    `📈 نرخ برد: ${winRate}%\n` +
-    `💰 سکه: ${user.coins}\n` +
-    `⚡ بهترین زمان: ${user.bestTime || '-'} ثانیه\n` +
-    `🏅 دستاوردها: ${user.achievements.length}/${Object.keys(ACHIEVEMENTS).length}`,
-    Markup.inlineKeyboard([Markup.button.callback('🔙 برگشت به منو', 'main_menu')])
-  );
-});
-
 bot.action('shop_menu', async (ctx) => {
   const user = getUser(ctx.from.id);
   let msg = '🛒 فروشگاه آیتم‌ها:\n\n';
@@ -727,31 +801,6 @@ bot.action('buy_extra_life', async (ctx) => {
   }
 });
 
-bot.action('help', async (ctx) => {
-  await ctx.editMessageText(
-    `📖 راهنمای بازی v4.0:\n\n` +
-    `🎯 هدف: همه سلول‌های بدون مین رو باز کن\n\n` +
-    `🕹️ کنترل‌ها:\n` +
-    `• کلیک عادی: باز کردن سلول\n` +
-    `• حالت 🚩 Flag: پرچم گذاری روی مین\n` +
-    `• دکمه 🔍 Auto: باز کردن خودکار خانه‌های امن\n` +
-    `• دکمه 🔄 New: بازی جدید با همون سطح\n` +
-    `• دکمه 🏠 Menu: برگشت به منوی اصلی\n\n` +
-    `💰 سیستم جایزه:\n` +
-    `• برد در هر سطح: سکه میگیری\n` +
-    `• دستاوردها: سکه اضافه\n` +
-    `• فروشگاه: آیتم بخر\n` +
-    `   - 💣 مین‌شکن: یه مین رو نابود کن\n` +
-    `   - ❤️ جان اضافه: یه اشتباه رو ببخش\n\n` +
-    `💡 نکات جدید v4.0:\n` +
-    `• مین‌شکن الان کار میکنه! 🔥\n` +
-    `• دیتابیس SQLite برای ذخیره‌سازی بهتر\n` +
-    `• دستاورد PERFECT اصلاح شد\n` +
-    `• بهینه‌سازی عملکرد`,
-    Markup.inlineKeyboard([Markup.button.callback('🔙 برگشت به منو', 'main_menu')])
-  );
-});
-
 // ================== MEMORY CLEANUP ==================
 setInterval(() => {
   const now = Date.now();
@@ -770,7 +819,7 @@ bot.catch((err, ctx) => {
 
 // ================== LAUNCH ==================
 bot.launch()
-  .then(() => console.log('🚀 Minesweeper PRO v4.0 Running!'))
+  .then(() => console.log('🚀 Minesweeper PRO v4.1 Running!'))
   .catch(console.error);
 
 process.once('SIGINT', () => bot.stop('SIGINT'));
