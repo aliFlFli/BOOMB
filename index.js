@@ -15,7 +15,7 @@ function createGame() {
   const board = Array(size).fill(0);
   const revealed = Array(size).fill(false);
 
-  // گذاشتن مین
+  // مین‌ها
   let placed = 0;
   while (placed < MINES) {
     const i = Math.floor(Math.random() * size);
@@ -25,7 +25,7 @@ function createGame() {
     }
   }
 
-  // شمارش مین‌های اطراف
+  // شمارش اطراف
   function count(x, y) {
     let c = 0;
 
@@ -75,7 +75,7 @@ function render(game) {
         if (game.board[idx] === '💣') {
           text = '💣';
         } else {
-          text = game.numbers[idx] === 0 ? '🟢' : String(game.numbers[idx]);
+          text = game.numbers[idx] === 0 ? '▫️' : String(game.numbers[idx]);
         }
       }
 
@@ -90,13 +90,30 @@ function render(game) {
   return Markup.inlineKeyboard(rows);
 }
 
-// ================== START ==================
-bot.command('startgame', (ctx) => {
+// ================== START MENU ==================
+bot.start((ctx) => {
+  ctx.reply(
+    `👋 سلام!
+
+💣 به Minesweeper Bot خوش اومدی
+
+🎮 برای شروع بازی روی دکمه زیر بزن`,
+    Markup.inlineKeyboard([
+      [Markup.button.callback('🎮 شروع بازی', 'start_game')]
+    ])
+  );
+});
+
+// ================== START GAME ==================
+bot.action('start_game', (ctx) => {
   const game = createGame();
 
   games[ctx.chat.id] = game;
 
-  ctx.reply('💣 بازی مین‌روب شروع شد!', render(game));
+  ctx.editMessageText(
+    '💣 بازی شروع شد!\n\nروی خانه‌ها کلیک کن',
+    render(game)
+  );
 });
 
 // ================== CLICK ==================
@@ -113,7 +130,7 @@ bot.action(/m_(\d+)/, async (ctx) => {
 
   game.revealed[idx] = true;
 
-  // برخورد با مین
+  // باخت
   if (game.board[idx] === '💣') {
     game.alive = false;
 
@@ -130,7 +147,7 @@ bot.action(/m_(\d+)/, async (ctx) => {
     game.alive = false;
 
     return ctx.editMessageText(
-      '🎉 بردی! همه خانه‌های امن رو باز کردی',
+      '🎉 بردی! همه خونه‌های امن رو باز کردی',
       render(game)
     );
   }
@@ -140,12 +157,17 @@ bot.action(/m_(\d+)/, async (ctx) => {
 });
 
 // ================== RESTART ==================
-bot.command('restart', (ctx) => {
+bot.action('restart', (ctx) => {
   const game = createGame();
   games[ctx.chat.id] = game;
 
-  ctx.reply('🔄 بازی جدید شروع شد', render(game));
+  ctx.editMessageText('🔄 بازی جدید شروع شد', render(game));
 });
 
-bot.launch();
-console.log('💣 Minesweeper Bot Running...');
+// ================== START BOT ==================
+bot.launch()
+  .then(() => console.log('💣 Minesweeper Bot Running...'))
+  .catch(console.error);
+
+process.once('SIGINT', () => bot.stop('SIGINT'));
+process.once('SIGTERM', () => bot.stop('SIGTERM'));
