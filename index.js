@@ -18,8 +18,9 @@ app.listen(PORT, () => console.log('🌐 Server on', PORT));
 
 // ================== BOT INIT ==================
 const bot = new Telegraf(process.env.BOT_TOKEN);
-const games = new Map(); // Use Map for better performance
+const games = new Map();
 const userSettings = new Map();
+let flagMode = new Map();
 
 // ================== UTILS ==================
 function getEmojiForNumber(num) {
@@ -41,6 +42,7 @@ class MinesweeperGame {
     this.startTime = Date.now();
     this.moves = 0;
     this.flaggedCount = 0;
+    this.difficulty = 'normal';
     
     this.placeMines();
     this.calculateNumbers();
@@ -124,7 +126,7 @@ class MinesweeperGame {
 }
 
 // ================== RENDER ==================
-function renderGame(game) {
+function renderGame(game, gameOver = false) {
   const rows = [];
   
   for (let i = 0; i < game.size; i++) {
@@ -146,12 +148,18 @@ function renderGame(game) {
     rows.push(row);
   }
   
-  // Add control row
-  rows.push([
-    Markup.button.callback('🔍 Auto', 'auto_reveal'),
-    Markup.button.callback('🚩 Flag mode', 'toggle_flag'),
-    Markup.button.callback('🏠 Menu', 'main_menu')
-  ]);
+  // کنترل پنل پایینی
+  const controlRow = [];
+  
+  if (!gameOver) {
+    controlRow.push(Markup.button.callback('🔍 Auto', 'auto_reveal'));
+    controlRow.push(Markup.button.callback('🚩 Flag mode', 'toggle_flag'));
+  }
+  
+  controlRow.push(Markup.button.callback('🔄 بازی جدید', 'new_game'));
+  controlRow.push(Markup.button.callback('🏠 منو اصلی', 'main_menu'));
+  
+  rows.push(controlRow);
   
   return Markup.inlineKeyboard(rows);
 }
@@ -159,7 +167,7 @@ function renderGame(game) {
 // ================== GAME LOGIC ==================
 async function handleCellClick(ctx, game, idx) {
   if (!game.alive) {
-    await ctx.answerCbQuery('❌ بازی تمام شده! دوباره شروع کن');
+    await ctx.answerCbQuery('❌ بازی تمام شده! دکمه بازی جدید رو بزن');
     return false;
   }
   
@@ -168,7 +176,6 @@ async function handleCellClick(ctx, game, idx) {
     return false;
   }
   
-  // Check if flagged
   if (game.flags[idx]) {
     await ctx.answerCbQuery('🚩 پرچم زده شده، اول پرچم رو بردار');
     return false;
@@ -176,35 +183,31 @@ async function handleCellClick(ctx, game, idx) {
   
   game.moves++;
   
-  // Hit mine
   if (game.board[idx] === '💣') {
     game.alive = false;
     game.revealAllMines();
     
     await ctx.editMessageText(
       `💥 باختی! 💀\n\n${game.getStats()}`,
-      renderGame(game)
+      renderGame(game, true)
     );
     return false;
   }
   
-  // Reveal cell
   game.revealEmpty(idx);
   
-  // Check win
   if (game.checkWin()) {
     game.alive = false;
     await ctx.editMessageText(
       `🎉 بردی! عالی بود 🎉\n\n${game.getStats()}`,
-      renderGame(game)
+      renderGame(game, true)
     );
     return true;
   }
   
-  // Update display
   await ctx.editMessageText(
     `💣 ماین‌سوییپر ${DIFFICULTY[game.difficulty]?.name || ''}\n${game.getStats()}`,
-    renderGame(game)
+    renderGame(game, false)
   );
   await ctx.answerCbQuery('✅ باز شد');
   return true;
@@ -212,7 +215,7 @@ async function handleCellClick(ctx, game, idx) {
 
 async function handleFlag(ctx, game, idx) {
   if (!game.alive) {
-    await ctx.answerCbQuery('❌ بازی تمام شده');
+    await ctx.answerCbQuery('❌ بازی تمام شده. دکمه "بازی جدید" رو بزن');
     return;
   }
   
@@ -226,17 +229,16 @@ async function handleFlag(ctx, game, idx) {
   
   await ctx.editMessageText(
     `💣 ماین‌سوییپر ${game.difficulty ? DIFFICULTY[game.difficulty]?.name : ''}\n${game.getStats()}`,
-    renderGame(game)
+    renderGame(game, false)
   );
   await ctx.answerCbQuery(game.flags[idx] ? '🚩 پرچم زده شد' : '🔓 پرچم برداشته شد');
 }
 
-// ================== BOT COMMANDS ==================
+// ================== BOT COMMANDS & ACTIONS ==================
 bot.start((ctx) => {
   const keyboard = Markup.inlineKeyboard([
     [Markup.button.callback('🎮 شروع بازی', 'new_game')],
     [Markup.button.callback('⚙️ تنظیمات', 'settings')],
-    [Markup.button.callback('📊 آمار من', 'my_stats')],
     [Markup.button.callback('❓ راهنما', 'help')]
   ]);
   
@@ -258,13 +260,13 @@ bot.action('new_game', (ctx) => {
     [Markup.button.callback('⚙️ معمولی', 'difficulty_normal')],
     [Markup.button.callback('🔥 سخت', 'difficulty_hard')],
     [Markup.button.callback('💀 حرفه‌ای', 'difficulty_expert')],
-    [Markup.button.callback('🔙 برگشت', 'main_menu')]
+    [Markup.button.callback('🔙 برگشت به منو', 'main_menu')]
   ]);
   
   ctx.editMessageText('🎲 سطح سختی رو انتخاب کن:', keyboard);
+  ctx.answerCbQuery();
 });
 
-// Difficulty handlers
 Object.keys(DIFFICULTY).forEach(level => {
   bot.action(`difficulty_${level}`, (ctx) => {
     const config = DIFFICULTY[level];
@@ -276,22 +278,19 @@ Object.keys(DIFFICULTY).forEach(level => {
     
     ctx.editMessageText(
       `🎮 بازی ${config.name}\n${game.getStats()}`,
-      renderGame(game)
+      renderGame(game, false)
     );
     ctx.answerCbQuery('🎮 بازی شروع شد!');
   });
 });
-
-// Cell handler (supports both click and flag mode)
-let flagMode = new Map(); // flag mode per user
 
 bot.action(/cell_(\d+)/, async (ctx) => {
   const chatId = ctx.chat.id;
   const idx = parseInt(ctx.match[1]);
   const game = games.get(chatId);
   
-  if (!game || !game.alive) {
-    await ctx.answerCbQuery('❌ بازی فعال نیست. /start کن');
+  if (!game) {
+    await ctx.answerCbQuery('❌ بازی فعال نیست. از منوی اصلی شروع کن');
     return;
   }
   
@@ -306,6 +305,13 @@ bot.action(/cell_(\d+)/, async (ctx) => {
 
 bot.action('toggle_flag', (ctx) => {
   const chatId = ctx.chat.id;
+  const game = games.get(chatId);
+  
+  if (!game || !game.alive) {
+    ctx.answerCbQuery('❌ بازی فعال نیست');
+    return;
+  }
+  
   const current = flagMode.get(chatId) || false;
   flagMode.set(chatId, !current);
   
@@ -317,11 +323,10 @@ bot.action('auto_reveal', async (ctx) => {
   const game = games.get(chatId);
   
   if (!game || !game.alive) {
-    await ctx.answerCbQuery('❌ بازی فعال نیست');
+    await ctx.answerCbQuery('❌ بازی فعال نیست. بازی جدید شروع کن');
     return;
   }
   
-  // Auto reveal all safe cells (advanced logic)
   let changed = false;
   for (let i = 0; i < game.totalCells; i++) {
     if (!game.revealed[i] && !game.flags[i] && game.board[i] !== '💣') {
@@ -335,12 +340,12 @@ bot.action('auto_reveal', async (ctx) => {
       game.alive = false;
       await ctx.editMessageText(
         `🎉 بردی! 🎉\n${game.getStats()}`,
-        renderGame(game)
+        renderGame(game, true)
       );
     } else {
       await ctx.editMessageText(
         `💣 ${game.getStats()}`,
-        renderGame(game)
+        renderGame(game, false)
       );
     }
     await ctx.answerCbQuery('✨ خانه‌های امن باز شدند');
@@ -352,40 +357,63 @@ bot.action('auto_reveal', async (ctx) => {
 bot.action('main_menu', (ctx) => {
   games.delete(ctx.chat.id);
   flagMode.delete(ctx.chat.id);
-  bot.start(ctx);
+  
+  const keyboard = Markup.inlineKeyboard([
+    [Markup.button.callback('🎮 شروع بازی', 'new_game')],
+    [Markup.button.callback('⚙️ تنظیمات', 'settings')],
+    [Markup.button.callback('❓ راهنما', 'help')]
+  ]);
+  
+  ctx.editMessageText(
+    `🎯 منوی اصلی Minesweeper PRO\n\nبرای شروع دکمه 🎮 رو بزن!`,
+    keyboard
+  );
 });
 
 bot.action('settings', (ctx) => {
-  ctx.editMessageText('⚙️ تنظیمات:\n\nحالت پرچم: میتونی حین بازی دکمه 🚩 Flag mode رو بزنی');
-});
-
-bot.action('my_stats', (ctx) => {
-  ctx.answerCbQuery('📊 آمار به زودی میاد!');
+  ctx.editMessageText(
+    '⚙️ تنظیمات:\n\n' +
+    '• حالت پرچم: حین بازی دکمه 🚩 Flag mode رو بزن\n' +
+    '• سطح سختی: قبل از شروع بازی انتخاب کن\n' +
+    '• آمار: تایمر و تعداد حرکت‌ها زیر صفحه نشون داده میشه\n\n' +
+    '🔜 تنظیمات بیشتر به زودی اضافه میشه!',
+    Markup.inlineKeyboard([Markup.button.callback('🔙 برگشت', 'main_menu')])
+  );
 });
 
 bot.action('help', (ctx) => {
   ctx.editMessageText(
-    `📖 راهنما:\n\n` +
+    `📖 راهنمای بازی:\n\n` +
+    `🎯 هدف: همه سلول‌هایی که مین ندارن رو باز کن\n\n` +
+    `🕹️ نحوه بازی:\n` +
     `• روی سلول‌ها کلیک کن تا باز بشن\n` +
     `• دکمه 🚩 Flag mode رو بزن تا حالت پرچم فعال بشه\n` +
     `• با پرچم مین‌ها رو علامت بزن\n` +
-    `• دکمه 🔍 Auto خانه‌های امن رو باز میکنه\n` +
+    `• دکمه 🔍 Auto خانه‌های امن رو خودکار باز میکنه\n` +
     `• عددها تعداد مین‌های اطراف رو نشون میدن\n` +
-    `• بازی وقتی همه غیر مین‌ها باز بشن بردی!`
+    `• عدد ٠ یعنی همه اطراف امن هستن\n\n` +
+    `🏆 برنده شدن:\n` +
+    `• وقتی همه سلول‌های بدون مین رو باز کنی بردی!\n\n` +
+    `💀 باختن:\n` +
+    `• اگر روی مین کلیک کنی میبازی!\n\n` +
+    `🔄 بعد از تموم شدن بازی:\n` +
+    `• دکمه 🔄 بازی جدید برای شروع دوباره\n` +
+    `• دکمه 🏠 منو اصلی برای برگشت به اول`,
+    Markup.inlineKeyboard([Markup.button.callback('🔙 برگشت', 'main_menu')])
   );
 });
 
-// Memory cleanup
+// ================== MEMORY CLEANUP ==================
 setInterval(() => {
   const now = Date.now();
   for (let [chatId, game] of games.entries()) {
-    if (now - game.startTime > 3600000) { // 1 hour
+    if (now - game.startTime > 3600000) {
       games.delete(chatId);
     }
   }
 }, 600000);
 
-// Error handling
+// ================== ERROR HANDLING ==================
 bot.catch((err, ctx) => {
   console.error('❌ Bot error:', err);
   ctx.reply('⚠️ خطایی رخ داد. لطفاً /start کنید').catch(() => {});
