@@ -11,9 +11,20 @@ const DIFFICULTY = {
   expert: { size: 8, mines: 20, name: '💀 حرفه‌ای', coin: 100 }
 };
 
+// ================== THEMES ==================
+const THEMES = {
+  default: { name: 'کلاسیک', emoji: '⬜', price: 0, bg: '⬜', mine: '💣', flag: '🚩', num: ['▪️', '1️⃣', '2️⃣', '3️⃣', '4️⃣', '5️⃣', '6️⃣', '7️⃣', '8️⃣'] },
+  neon: { name: 'نئون', emoji: '🟩', price: 200, bg: '🟩', mine: '💚', flag: '🚩', num: ['▪️', '1️⃣', '2️⃣', '3️⃣', '4️⃣', '5️⃣', '6️⃣', '7️⃣', '8️⃣'] },
+  dark: { name: 'شب', emoji: '⬛', price: 150, bg: '⬛', mine: '💀', flag: '⚑', num: ['▪️', '❶', '❷', '❸', '❹', '❺', '❻', '❼', '❽'] },
+  gold: { name: 'طلایی', emoji: '🟨', price: 500, bg: '🟨', mine: '👑', flag: '⭐', num: ['▪️', '①', '②', '③', '④', '⑤', '⑥', '⑦', '⑧'] },
+  candy: { name: 'شیرینی', emoji: '🩷', price: 300, bg: '🩷', mine: '🍬', flag: '🍭', num: ['▪️', '1️⃣', '2️⃣', '3️⃣', '4️⃣', '5️⃣', '6️⃣', '7️⃣', '8️⃣'] },
+  ocean: { name: 'اقیانوسی', emoji: '💙', price: 250, bg: '💙', mine: '🐟', flag: '⚓', num: ['▪️', '1️⃣', '2️⃣', '3️⃣', '4️⃣', '5️⃣', '6️⃣', '7️⃣', '8️⃣'] },
+  fire: { name: 'آتشی', emoji: '🧡', price: 350, bg: '🧡', mine: '🔥', flag: '⚡', num: ['▪️', '1️⃣', '2️⃣', '3️⃣', '4️⃣', '5️⃣', '6️⃣', '7️⃣', '8️⃣'] }
+};
+
 // ================== KEEP ALIVE ==================
 const app = express();
-app.get('/', (req, res) => res.send('🎮 Minesweeper PRO v5.0 is alive'));
+app.get('/', (req, res) => res.send('🎮 Minesweeper PRO v5.1 is alive'));
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log('🌐 Server on', PORT));
 
@@ -36,7 +47,16 @@ db.exec(`
     weekly_score INTEGER DEFAULT 0,
     total_score INTEGER DEFAULT 0,
     expert_wins INTEGER DEFAULT 0,
-    name TEXT
+    name TEXT,
+    theme TEXT DEFAULT 'default'
+  )
+`);
+
+db.exec(`
+  CREATE TABLE IF NOT EXISTS user_themes (
+    user_id INTEGER,
+    theme_key TEXT,
+    PRIMARY KEY (user_id, theme_key)
   )
 `);
 
@@ -66,7 +86,8 @@ function getUser(userId) {
       weeklyScore: 0,
       totalScore: 0,
       expertWins: 0,
-      name: 'کاربر'
+      name: 'کاربر',
+      theme: 'default'
     };
   }
   return {
@@ -84,7 +105,8 @@ function getUser(userId) {
     weeklyScore: row.weekly_score,
     totalScore: row.total_score,
     expertWins: row.expert_wins,
-    name: row.name || 'کاربر'
+    name: row.name || 'کاربر',
+    theme: row.theme || 'default'
   };
 }
 
@@ -104,7 +126,8 @@ function updateUser(user) {
       weekly_score = ?,
       total_score = ?,
       expert_wins = ?,
-      name = ?
+      name = ?,
+      theme = ?
     WHERE user_id = ?
   `).run(
     user.coins,
@@ -121,6 +144,7 @@ function updateUser(user) {
     user.totalScore,
     user.expertWins,
     user.name,
+    user.theme,
     user.userId
   );
 }
@@ -145,9 +169,10 @@ function getMainMenu() {
           { text: '🏆 لیدربورد', callback_data: 'leaderboard_menu', style: 'primary' }
         ],
         [
-          { text: '📊 آمار من', callback_data: 'my_stats', style: 'primary' },
-          { text: '❓ راهنما', callback_data: 'help', style: 'danger' }
-        ]
+          { text: '⚙️ تنظیمات', callback_data: 'settings_menu', style: 'primary' },
+          { text: '📊 آمار من', callback_data: 'my_stats', style: 'primary' }
+        ],
+        [{ text: '❓ راهنما', callback_data: 'help', style: 'danger' }]
       ]
     }
   };
@@ -253,11 +278,12 @@ const SHOP = {
 
 // ================== GAME CLASS ==================
 class MinesweeperGame {
-  constructor(size, minesCount, difficulty) {
+  constructor(size, minesCount, difficulty, userId) {
     this.size = size;
     this.totalCells = size * size;
     this.minesCount = minesCount;
     this.difficulty = difficulty;
+    this.userId = userId;
     this.board = Array(this.totalCells).fill(0);
     this.revealed = Array(this.totalCells).fill(false);
     this.flags = Array(this.totalCells).fill(false);
@@ -364,25 +390,27 @@ class MinesweeperGame {
 }
 
 // ================== RENDER GAME ==================
-function getEmojiForNumber(num) {
-  const emojis = ['▪️', '1️⃣', '2️⃣', '3️⃣', '4️⃣', '5️⃣', '6️⃣', '7️⃣', '8️⃣'];
-  return emojis[num] || '❓';
-}
-
 function renderGame(game, gameOver = false) {
+  const user = getUser(game.userId);
+  const theme = THEMES[user.theme] || THEMES.default;
+  
   const rows = [];
   for (let i = 0; i < game.size; i++) {
     const row = [];
     for (let j = 0; j < game.size; j++) {
       const idx = i * game.size + j;
-      let display = '⬜';
+      let display = theme.bg;
+      
       if (game.revealed[idx]) {
-        if (game.board[idx] === '💣') display = '💣';
+        if (game.board[idx] === '💣') display = theme.mine;
         else if (game.board[idx] === 0) display = '▪️';
-        else display = getEmojiForNumber(game.board[idx]);
+        else {
+          display = theme.num[game.board[idx]] || '❓';
+        }
       } else if (game.flags[idx]) {
-        display = '🚩';
+        display = theme.flag;
       }
+      
       row.push(Markup.button.callback(display, `cell_${idx}`));
     }
     rows.push(row);
@@ -522,7 +550,7 @@ bot.start(async (ctx) => {
   }
   
   await ctx.reply(
-    `🎯 به Minesweeper PRO v5.0 خوش اومدی!\n\n👤 ${user.name}\n💰 سکه: ${user.coins}\n🏆 برد: ${user.wins} | باخت: ${user.losses}\n🔥 استریک: ${user.currentStreak || 0}\n\n⚡ از دکمه‌های زیر استفاده کن:`,
+    `🎯 به Minesweeper PRO v5.1 خوش اومدی!\n\n👤 ${user.name}\n💰 سکه: ${user.coins}\n🏆 برد: ${user.wins} | باخت: ${user.losses}\n🔥 استریک: ${user.currentStreak || 0}\n🎨 تم: ${THEMES[user.theme].name}\n\n⚡ از دکمه‌های زیر استفاده کن:`,
     getMainMenu()
   );
 });
@@ -530,9 +558,88 @@ bot.start(async (ctx) => {
 bot.action('main_menu', async (ctx) => {
   const user = getUser(ctx.from.id);
   await ctx.editMessageText(
-    `🎯 منوی اصلی\n\n👤 ${user.name}\n💰 سکه: ${user.coins}\n🏆 برد: ${user.wins} | باخت: ${user.losses}\n🔥 استریک: ${user.currentStreak || 0}`,
+    `🎯 منوی اصلی\n\n👤 ${user.name}\n💰 سکه: ${user.coins}\n🏆 برد: ${user.wins} | باخت: ${user.losses}\n🔥 استریک: ${user.currentStreak || 0}\n🎨 تم: ${THEMES[user.theme].name}`,
     getMainMenu()
   );
+});
+
+// ================== SETTINGS MENU ==================
+bot.action('settings_menu', async (ctx) => {
+  const user = getUser(ctx.from.id);
+  
+  const purchasedThemes = db.prepare('SELECT theme_key FROM user_themes WHERE user_id = ?').all(user.userId);
+  const purchasedKeys = purchasedThemes.map(t => t.theme_key);
+  
+  let msg = `⚙️ تنظیمات\n\n💰 سکه: ${user.coins}\n🎨 تم فعلی: ${THEMES[user.theme].name}\n\n📦 تم‌های موجود:\n\n`;
+  
+  const keyboardButtons = [];
+  
+  for (const [key, theme] of Object.entries(THEMES)) {
+    const isOwned = purchasedKeys.includes(key) || key === 'default';
+    const isActive = user.theme === key;
+    
+    msg += `${isActive ? '✅' : '🔘'} ${theme.name} `;
+    msg += theme.price > 0 ? `💰 ${theme.price} سکه` : '🎁 رایگان';
+    msg += `\n   ${theme.emoji} ${theme.bg} ${theme.mine} ${theme.flag}\n\n`;
+  }
+  
+  for (const [key, theme] of Object.entries(THEMES)) {
+    const isOwned = purchasedKeys.includes(key) || key === 'default';
+    const isActive = user.theme === key;
+    
+    if (!isOwned && theme.price > 0) {
+      keyboardButtons.push([{ text: `🎨 خرید ${theme.name} (${theme.price}🪙)`, callback_data: `buy_theme_${key}`, style: 'success' }]);
+    } else if (!isActive && key !== 'default') {
+      keyboardButtons.push([{ text: `🎨 فعال‌سازی ${theme.name}`, callback_data: `activate_theme_${key}`, style: 'primary' }]);
+    }
+  }
+  
+  keyboardButtons.push([{ text: '🔙 برگشت', callback_data: 'main_menu', style: 'primary' }]);
+  
+  await ctx.editMessageText(msg, { reply_markup: { inline_keyboard: keyboardButtons } });
+});
+
+bot.action(/buy_theme_(.+)/, async (ctx) => {
+  const themeKey = ctx.match[1];
+  const theme = THEMES[themeKey];
+  const user = getUser(ctx.from.id);
+  
+  if (!theme) {
+    await ctx.answerCbQuery('❌ تم یافت نشد');
+    return;
+  }
+  
+  if (user.coins < theme.price) {
+    await ctx.answerCbQuery(`❌ سکه کافی نیست! نیاز به ${theme.price} سکه داری`, true);
+    return;
+  }
+  
+  user.coins -= theme.price;
+  updateUser(user);
+  
+  db.prepare('INSERT OR IGNORE INTO user_themes (user_id, theme_key) VALUES (?, ?)').run(user.userId, themeKey);
+  
+  await ctx.answerCbQuery(`✅ تم ${theme.name} خریداری شد!`, true);
+  
+  bot.action('settings_menu', ctx);
+});
+
+bot.action(/activate_theme_(.+)/, async (ctx) => {
+  const themeKey = ctx.match[1];
+  const theme = THEMES[themeKey];
+  const user = getUser(ctx.from.id);
+  
+  if (!theme) {
+    await ctx.answerCbQuery('❌ تم یافت نشد');
+    return;
+  }
+  
+  user.theme = themeKey;
+  updateUser(user);
+  
+  await ctx.answerCbQuery(`✅ تم ${theme.name} فعال شد!`, true);
+  
+  bot.action('settings_menu', ctx);
 });
 
 // ================== LEADERBOARD MENU ==================
@@ -664,14 +771,14 @@ bot.action('my_stats', async (ctx) => {
   const user = getUser(ctx.from.id);
   const winRate = user.gamesPlayed > 0 ? ((user.wins / user.gamesPlayed) * 100).toFixed(1) : 0;
   await ctx.editMessageText(
-    `📊 آمار شما:\n\n🎮 بازی‌ها: ${user.gamesPlayed}\n🏆 برد: ${user.wins}\n💀 باخت: ${user.losses}\n📈 نرخ برد: ${winRate}%\n💰 سکه: ${user.coins}\n⚡ بهترین زمان: ${user.bestTime || '-'} ثانیه\n🔥 بهترین استریک: ${user.bestStreak || 0}\n🏅 دستاوردها: ${user.achievements.length}/${Object.keys(ACHIEVEMENTS).length}`,
+    `📊 آمار شما:\n\n🎮 بازی‌ها: ${user.gamesPlayed}\n🏆 برد: ${user.wins}\n💀 باخت: ${user.losses}\n📈 نرخ برد: ${winRate}%\n💰 سکه: ${user.coins}\n⚡ بهترین زمان: ${user.bestTime || '-'} ثانیه\n🔥 بهترین استریک: ${user.bestStreak || 0}\n🏅 دستاوردها: ${user.achievements.length}/${Object.keys(ACHIEVEMENTS).length}\n🎨 تم فعلی: ${THEMES[user.theme].name}`,
     { reply_markup: { inline_keyboard: [[{ text: '🔙 برگشت', callback_data: 'main_menu', style: 'primary' }]] } }
   );
 });
 
 bot.action('help', async (ctx) => {
   await ctx.editMessageText(
-    `📖 راهنمای v5.0:\n\n🎯 هدف: همه سلول‌های بدون مین رو باز کن\n\n🕹️ کنترل‌ها:\n• کلیک عادی: باز کردن سلول\n• حالت 🚩 Flag: پرچم گذاری روی مین\n• 🔍 Auto: باز کردن خودکار خانه‌های امن\n\n💰 سیستم جایزه:\n• برد در هر سطح: سکه میگیری\n• دستاوردها: سکه اضافه\n• استریک: برد متوالی جایزه داره\n• لیدربورد: رقابت با دیگران`,
+    `📖 راهنمای v5.1:\n\n🎯 هدف: همه سلول‌های بدون مین رو باز کن\n\n🕹️ کنترل‌ها:\n• کلیک عادی: باز کردن سلول\n• حالت 🚩 Flag: پرچم گذاری روی مین\n• 🔍 Auto: باز کردن خودکار خانه‌های امن\n\n💰 سیستم جایزه:\n• برد در هر سطح: سکه میگیری\n• دستاوردها: سکه اضافه\n• استریک: برد متوالی جایزه داره\n• لیدربورد: رقابت با دیگران\n\n🎨 تم‌ها:\n• از بخش تنظیمات میتونی ظاهر بازی رو عوض کنی\n• تم‌های جدید با سکه قابل خریدن`,
     { reply_markup: { inline_keyboard: [[{ text: '🔙 برگشت', callback_data: 'main_menu', style: 'primary' }]] } }
   );
 });
@@ -698,7 +805,7 @@ bot.action('new_game', (ctx) => {
 Object.keys(DIFFICULTY).forEach(level => {
   bot.action(`difficulty_${level}`, (ctx) => {
     const config = DIFFICULTY[level];
-    const game = new MinesweeperGame(config.size, config.mines, level);
+    const game = new MinesweeperGame(config.size, config.mines, level, ctx.from.id);
     games.set(ctx.chat.id, game);
     ctx.editMessageText(`🎮 بازی ${config.name}\n💰 جایزه: ${config.coin} سکه\n${game.getStats()}`, renderGame(game, false));
     ctx.answerCbQuery('🎮 بازی شروع شد!');
@@ -818,7 +925,7 @@ bot.catch((err, ctx) => {
 
 // ================== LAUNCH ==================
 bot.launch()
-  .then(() => console.log('🚀 Minesweeper PRO v5.0 Running!'))
+  .then(() => console.log('🚀 Minesweeper PRO v5.1 Running!'))
   .catch(console.error);
 
 process.once('SIGINT', () => bot.stop('SIGINT'));
