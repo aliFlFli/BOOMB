@@ -755,4 +755,71 @@ bot.action('shop_menu', async (ctx) => {
   const user = getUser(ctx.from.id);
   let msg = '🛒 فروشگاه آیتم‌ها:\n\n';
   for (const [key, item] of Object.entries(SHOP)) {
-    msg
+    msg += `${item.name}\n   ${item.desc}\n   💰 ${item.price} سکه\n`;
+    if (user.inventory?.[key]) msg += `   📦 موجودی: ${user.inventory[key]}\n`;
+    msg += '\n';
+  }
+  await ctx.editMessageText(msg, {
+    reply_markup: {
+      inline_keyboard: [
+        [{ text: '💣 خرید مین‌شکن (۵۰)', callback_data: 'buy_bomb_disabler', style: 'success' }],
+        [{ text: '❤️ خرید جان اضافه (۷۵)', callback_data: 'buy_extra_life', style: 'success' }],
+        [{ text: '🔙 برگشت', callback_data: 'main_menu', style: 'primary' }]
+      ]
+    }
+  });
+});
+
+bot.action('buy_bomb_disabler', async (ctx) => {
+  const user = getUser(ctx.from.id);
+  if (user.coins >= 50) {
+    user.coins -= 50;
+    if (!user.inventory) user.inventory = {};
+    user.inventory.bomb_disabler = (user.inventory.bomb_disabler || 0) + 1;
+    updateUser(user);
+    await ctx.answerCbQuery('✅ مین‌شکن خریداری شد!', true);
+    await ctx.editMessageText('✅ خرید انجام شد!', { reply_markup: { inline_keyboard: [[{ text: '🔙 برگشت', callback_data: 'main_menu', style: 'primary' }]] } });
+  } else {
+    await ctx.answerCbQuery('❌ سکه کافی نیست!', true);
+  }
+});
+
+bot.action('buy_extra_life', async (ctx) => {
+  const user = getUser(ctx.from.id);
+  if (user.coins >= 75) {
+    user.coins -= 75;
+    if (!user.inventory) user.inventory = {};
+    user.inventory.extra_life = (user.inventory.extra_life || 0) + 1;
+    updateUser(user);
+    await ctx.answerCbQuery('❤️ جان اضافه خریداری شد!', true);
+    await ctx.editMessageText('✅ خرید انجام شد!', { reply_markup: { inline_keyboard: [[{ text: '🔙 برگشت', callback_data: 'main_menu', style: 'primary' }]] } });
+  } else {
+    await ctx.answerCbQuery('❌ سکه کافی نیست!', true);
+  }
+});
+
+// ================== CLEANUP ==================
+setInterval(() => {
+  const now = Date.now();
+  for (let [chatId, game] of games.entries()) {
+    if (now - game.startTime > 3600000) games.delete(chatId);
+  }
+}, 600000);
+
+setInterval(() => {
+  checkWeeklyReset();
+}, 3600000);
+
+// ================== ERROR HANDLING ==================
+bot.catch((err, ctx) => {
+  console.error('❌ Error:', err);
+  ctx.reply('⚠️ خطایی رخ داد. لطفاً /start کنید').catch(() => {});
+});
+
+// ================== LAUNCH ==================
+bot.launch()
+  .then(() => console.log('🚀 Minesweeper PRO v5.0 Running!'))
+  .catch(console.error);
+
+process.once('SIGINT', () => bot.stop('SIGINT'));
+process.once('SIGTERM', () => bot.stop('SIGTERM'));
