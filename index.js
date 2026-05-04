@@ -88,33 +88,42 @@ const bot = new Telegraf(process.env.BOT_TOKEN);
 const games = new Map();
 let flagMode = new Map();
 
-// ================== PERMANENT MENU KEYBOARD (شیشه‌ای + رنگی) ==================
-function getMainMenuKeyboard() {
-  return {
+// ================== START COMMAND ==================
+bot.start(async (ctx) => {
+  const userId = ctx.from.id;
+  const user = getUser(userId);
+  
+  // دکمه‌های شیشه‌ای رنگی زیر پیام
+  const keyboard = {
     reply_markup: {
-      keyboard: [
+      inline_keyboard: [
         [
-          { text: '🎮 شروع بازی', style: 'primary' }
+          { text: '🎮 شروع بازی', callback_data: 'new_game', style: 'primary' }
         ],
         [
-          { text: '💰 کیف پول', style: 'success' },
-          { text: '🛒 فروشگاه', style: 'success' }
+          { text: '💰 کیف پول', callback_data: 'wallet', style: 'success' },
+          { text: '🛒 فروشگاه', callback_data: 'shop_menu', style: 'success' }
         ],
         [
-          { text: '🏆 دستاوردها', style: 'primary' },
-          { text: '📊 آمار من', style: 'primary' }
+          { text: '🏆 دستاوردها', callback_data: 'achievements', style: 'primary' },
+          { text: '📊 آمار من', callback_data: 'my_stats', style: 'primary' }
         ],
         [
-          { text: '❓ راهنما', style: 'danger' }
+          { text: '❓ راهنما', callback_data: 'help', style: 'danger' }
         ]
-      ],
-      resize_keyboard: true,
-      persistent: true,
-      is_persistent: true,
-      input_field_placeholder: 'از منوی زیر انتخاب کن...'
+      ]
     }
   };
-}
+  
+  await ctx.reply(
+    `🎯 به Minesweeper PRO خوش اومدی!\n\n` +
+    `👤 ${ctx.from.first_name}\n` +
+    `💰 سکه: ${user.coins}\n` +
+    `🏆 برد: ${user.wins} | باخت: ${user.losses}\n\n` +
+    `⚡ از دکمه‌های زیر استفاده کن:`,
+    keyboard
+  );
+});
 
 // ================== ACHIEVEMENTS ==================
 const ACHIEVEMENTS = {
