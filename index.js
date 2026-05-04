@@ -88,19 +88,30 @@ const bot = new Telegraf(process.env.BOT_TOKEN);
 const games = new Map();
 let flagMode = new Map();
 
-// ================== PERMANENT MENU KEYBOARD ==================
+// ================== PERMANENT MENU KEYBOARD (شیشه‌ای + رنگی) ==================
 function getMainMenuKeyboard() {
   return {
     reply_markup: {
       keyboard: [
-        [{ text: '🎮 شروع بازی' }],
-        [{ text: '💰 کیف پول' }, { text: '🛒 فروشگاه' }],
-        [{ text: '🏆 دستاوردها' }, { text: '📊 آمار من' }],
-        [{ text: '❓ راهنما' }]
+        [
+          { text: '🎮 شروع بازی', style: 'primary' }
+        ],
+        [
+          { text: '💰 کیف پول', style: 'success' },
+          { text: '🛒 فروشگاه', style: 'success' }
+        ],
+        [
+          { text: '🏆 دستاوردها', style: 'primary' },
+          { text: '📊 آمار من', style: 'primary' }
+        ],
+        [
+          { text: '❓ راهنما', style: 'danger' }
+        ]
       ],
       resize_keyboard: true,
       persistent: true,
-      is_persistent: true
+      is_persistent: true,
+      input_field_placeholder: 'از منوی زیر انتخاب کن...'
     }
   };
 }
