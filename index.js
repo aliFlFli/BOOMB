@@ -24,7 +24,7 @@ const THEMES = {
 
 // ================== KEEP ALIVE ==================
 const app = express();
-app.get('/', (req, res) => res.send('🎮 Minesweeper PRO v5.1 is alive'));
+app.get('/', (req, res) => res.send('🎮 Minesweeper PRO v5.2 is alive'));
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log('🌐 Server on', PORT));
 
@@ -273,7 +273,12 @@ function checkAchievement(userId, type, gameData) {
 // ================== SHOP ==================
 const SHOP = {
   bomb_disabler: { name: '💣 مین‌شکن', desc: 'یه مین رو نابود کن', price: 50 },
-  extra_life: { name: '❤️ جان اضافه', desc: 'یه بار میتونی اشتباه کنی', price: 75 }
+  extra_life: { name: '❤️ جان اضافه', desc: 'یه بار میتونی اشتباه کنی', price: 75 },
+  mine_detector: { name: '🔦 مین‌یاب', desc: 'یک مین رو نشون میده', price: 120 },
+  smart_hint: { name: '🧠 حسگر هوشمند', desc: 'بهترین خونه امن رو پیشنهاد میده', price: 90 },
+  time_freeze: { name: '⏰ فریز زمان', desc: '+۳۰ ثانیه به زمان', price: 80 },
+  double_reward: { name: '🔥 جایزه دوبرابر', desc: 'برد بعدی ×۲ سکه', price: 200 },
+  shield: { name: '🛡️ سپر محافظ', desc: 'یک بار مرگ رو نجات میده', price: 150 }
 };
 
 // ================== GAME CLASS ==================
@@ -294,6 +299,8 @@ class MinesweeperGame {
     this.actualClicks = 0;
     this.flaggedCount = 0;
     this.extraLifeUsed = false;
+    this.doubleRewardActive = false;
+    this.shieldActive = false;
     
     this.placeMines();
     this.calculateNumbers();
@@ -373,6 +380,28 @@ class MinesweeperGame {
     return false;
   }
   
+  useMineDetector() {
+    for (let i = 0; i < this.totalCells; i++) {
+      if (this.board[i] === '💣' && !this.revealed[i] && !this.flags[i]) {
+        return i;
+      }
+    }
+    return -1;
+  }
+  
+  useSmartHint() {
+    for (let i = 0; i < this.totalCells; i++) {
+      if (!this.revealed[i] && !this.flags[i] && this.board[i] !== '💣') {
+        return i;
+      }
+    }
+    return -1;
+  }
+  
+  freezeTime() {
+    this.startTime += 30000;
+  }
+  
   checkWin() {
     return this.opened === this.totalCells - this.minesCount;
   }
@@ -420,6 +449,7 @@ function renderGame(game, gameOver = false) {
   if (!gameOver && game.alive) {
     controlRow.push(Markup.button.callback('🔍 Auto', 'auto_reveal'));
     controlRow.push(Markup.button.callback('🚩 Flag', 'toggle_flag'));
+    controlRow.push(Markup.button.callback('🧰 آیتم‌ها', 'use_items_menu'));
   }
   controlRow.push(Markup.button.callback('🔄 New', 'new_game'));
   controlRow.push(Markup.button.callback('🏠 Menu', 'main_menu'));
@@ -460,6 +490,15 @@ async function handleCellClick(ctx, game, idx) {
   game.moves++;
   
   if (game.board[idx] === '💣') {
+    if (user.inventory?.shield > 0 && !game.shieldActive) {
+      game.shieldActive = true;
+      user.inventory.shield--;
+      updateUser(user);
+      await ctx.answerCbQuery('🛡️ سپر محافظ فعال شد! این مین رو دفع کردی!', true);
+      await ctx.editMessageText(`💣 ${DIFFICULTY[game.difficulty]?.name}\n🛡️ سپر محافظ یک مین رو دفع کرد!\n${game.getStats()}`, renderGame(game, false));
+      return true;
+    }
+    
     if (user.inventory?.extra_life > 0 && !game.extraLifeUsed) {
       game.extraLifeUsed = true;
       user.inventory.extra_life--;
@@ -485,7 +524,15 @@ async function handleCellClick(ctx, game, idx) {
     game.alive = false;
     const gameTime = game.getTimeInSeconds();
     const safeCells = game.totalCells - game.minesCount;
-    const coinReward = DIFFICULTY[game.difficulty].coin;
+    let coinReward = DIFFICULTY[game.difficulty].coin;
+    
+    if (user.inventory?.double_reward > 0 && !game.doubleRewardActive) {
+      game.doubleRewardActive = true;
+      user.inventory.double_reward--;
+      coinReward *= 2;
+      updateUser(user);
+      await ctx.answerCbQuery('🔥 جایزه دوبرابر فعال شد!', true);
+    }
     
     user.coins += coinReward;
     user.wins++;
@@ -540,6 +587,188 @@ async function handleFlag(ctx, game, idx) {
   return true;
 }
 
+// ================== ITEMS ACTIONS ==================
+bot.action('use_items_menu', async (ctx) => {
+  const user = getUser(ctx.from.id);
+  const game = games.get(ctx.chat.id);
+  
+  if (!game || !game.alive) {
+    await ctx.answerCbQuery('❌ بازی فعال نیست');
+    return;
+  }
+  
+  let msg = '🧰 **آیتم‌های موجود:**\n\n';
+  const keyboardButtons = [];
+  
+  if (user.inventory?.mine_detector > 0) {
+    msg += `🔦 مین‌یاب (${user.inventory.mine_detector} عدد)\n   یک مین رو نشون میده\n\n`;
+    keyboardButtons.push([{ text: `🔦 استفاده از مین‌یاب`, callback_data: 'use_mine_detector', style: 'primary' }]);
+  }
+  
+  if (user.inventory?.smart_hint > 0) {
+    msg += `🧠 حسگر هوشمند (${user.inventory.smart_hint} عدد)\n   بهترین خونه امن رو نشون میده\n\n`;
+    keyboardButtons.push([{ text: `🧠 استفاده از حسگر`, callback_data: 'use_smart_hint', style: 'primary' }]);
+  }
+  
+  if (user.inventory?.time_freeze > 0) {
+    msg += `⏰ فریز زمان (${user.inventory.time_freeze} عدد)\n   +۳۰ ثانیه به زمان\n\n`;
+    keyboardButtons.push([{ text: `⏰ فریز زمان`, callback_data: 'use_time_freeze', style: 'primary' }]);
+  }
+  
+  if (user.inventory?.double_reward > 0 && !game.doubleRewardActive) {
+    msg += `🔥 جایزه دوبرابر (${user.inventory.double_reward} عدد)\n   برد بعدی ×۲ سکه\n\n`;
+    keyboardButtons.push([{ text: `🔥 فعال‌سازی جایزه ×۲`, callback_data: 'use_double_reward', style: 'danger' }]);
+  }
+  
+  if (user.inventory?.shield > 0 && !game.shieldActive) {
+    msg += `🛡️ سپر محافظ (${user.inventory.shield} عدد)\n   یک بار مرگ رو نجات میده\n\n`;
+    keyboardButtons.push([{ text: `🛡️ فعال‌سازی سپر`, callback_data: 'use_shield', style: 'primary' }]);
+  }
+  
+  if (keyboardButtons.length === 0) {
+    msg = '❌ هیچ آیتمی برای استفاده نداری!\nاز فروشگاه بخر.';
+  }
+  
+  keyboardButtons.push([{ text: '🔙 برگشت به بازی', callback_data: 'back_to_game', style: 'primary' }]);
+  
+  await ctx.editMessageText(msg, { reply_markup: { inline_keyboard: keyboardButtons } });
+});
+
+bot.action('use_mine_detector', async (ctx) => {
+  const user = getUser(ctx.from.id);
+  const game = games.get(ctx.chat.id);
+  
+  if (!game || !game.alive) {
+    await ctx.answerCbQuery('❌ بازی فعال نیست');
+    return;
+  }
+  
+  if (user.inventory?.mine_detector <= 0) {
+    await ctx.answerCbQuery('❌ مین‌یاب نداری!', true);
+    return;
+  }
+  
+  const mineIdx = game.useMineDetector();
+  if (mineIdx === -1) {
+    await ctx.answerCbQuery('🔍 هیچ مین پنهانی پیدا نشد!', true);
+    return;
+  }
+  
+  user.inventory.mine_detector--;
+  updateUser(user);
+  
+  const x = Math.floor(mineIdx / game.size);
+  const y = mineIdx % game.size;
+  
+  await ctx.answerCbQuery(`🔦 مین در ردیف ${x+1}، ستون ${y+1} پیدا شد!`, true);
+  await ctx.editMessageText(`💣 ${DIFFICULTY[game.difficulty]?.name}\n🔦 مین‌یاب: یک مین پیدا شد!\n${game.getStats()}`, renderGame(game, false));
+});
+
+bot.action('use_smart_hint', async (ctx) => {
+  const user = getUser(ctx.from.id);
+  const game = games.get(ctx.chat.id);
+  
+  if (!game || !game.alive) {
+    await ctx.answerCbQuery('❌ بازی فعال نیست');
+    return;
+  }
+  
+  if (user.inventory?.smart_hint <= 0) {
+    await ctx.answerCbQuery('❌ حسگر هوشمند نداری!', true);
+    return;
+  }
+  
+  const hintIdx = game.useSmartHint();
+  if (hintIdx === -1) {
+    await ctx.answerCbQuery('🧠 هیچ خونه امنی پیدا نشد!', true);
+    return;
+  }
+  
+  user.inventory.smart_hint--;
+  updateUser(user);
+  
+  const x = Math.floor(hintIdx / game.size);
+  const y = hintIdx % game.size;
+  
+  await ctx.answerCbQuery(`🧠 پیشنهاد: ردیف ${x+1}، ستون ${y+1} امن به نظر میرسه!`, true);
+  await ctx.editMessageText(`💣 ${DIFFICULTY[game.difficulty]?.name}\n🧠 حسگر هوشمند: یه خونه امن پیدا شد!\n${game.getStats()}`, renderGame(game, false));
+});
+
+bot.action('use_time_freeze', async (ctx) => {
+  const user = getUser(ctx.from.id);
+  const game = games.get(ctx.chat.id);
+  
+  if (!game || !game.alive) {
+    await ctx.answerCbQuery('❌ بازی فعال نیست');
+    return;
+  }
+  
+  if (user.inventory?.time_freeze <= 0) {
+    await ctx.answerCbQuery('❌ فریز زمان نداری!', true);
+    return;
+  }
+  
+  user.inventory.time_freeze--;
+  updateUser(user);
+  game.freezeTime();
+  
+  await ctx.answerCbQuery('⏰ ۳۰ ثانیه به زمان اضافه شد!', true);
+  await ctx.editMessageText(`💣 ${DIFFICULTY[game.difficulty]?.name}\n⏰ فریز زمان فعال شد! +۳۰ ثانیه\n${game.getStats()}`, renderGame(game, false));
+});
+
+bot.action('use_double_reward', async (ctx) => {
+  const user = getUser(ctx.from.id);
+  const game = games.get(ctx.chat.id);
+  
+  if (!game || !game.alive) {
+    await ctx.answerCbQuery('❌ بازی فعال نیست');
+    return;
+  }
+  
+  if (user.inventory?.double_reward <= 0 || game.doubleRewardActive) {
+    await ctx.answerCbQuery('❌ جایزه دوبرابر فعال نیست یا نداری!', true);
+    return;
+  }
+  
+  user.inventory.double_reward--;
+  game.doubleRewardActive = true;
+  updateUser(user);
+  
+  await ctx.answerCbQuery('🔥 جایزه دوبرابر فعال شد! برد بعدی ×۲ سکه!', true);
+  await ctx.editMessageText(`💣 ${DIFFICULTY[game.difficulty]?.name}\n🔥 جایزه دوبرابر فعال شد!\n${game.getStats()}`, renderGame(game, false));
+});
+
+bot.action('use_shield', async (ctx) => {
+  const user = getUser(ctx.from.id);
+  const game = games.get(ctx.chat.id);
+  
+  if (!game || !game.alive) {
+    await ctx.answerCbQuery('❌ بازی فعال نیست');
+    return;
+  }
+  
+  if (user.inventory?.shield <= 0 || game.shieldActive) {
+    await ctx.answerCbQuery('❌ سپر محافظ فعال نیست یا نداری!', true);
+    return;
+  }
+  
+  user.inventory.shield--;
+  game.shieldActive = true;
+  updateUser(user);
+  
+  await ctx.answerCbQuery('🛡️ سپر محافظ فعال شد! یک بار مرگ رو نجات میده!', true);
+  await ctx.editMessageText(`💣 ${DIFFICULTY[game.difficulty]?.name}\n🛡️ سپر محافظ فعال شد!\n${game.getStats()}`, renderGame(game, false));
+});
+
+bot.action('back_to_game', async (ctx) => {
+  const game = games.get(ctx.chat.id);
+  if (game && game.alive) {
+    await ctx.editMessageText(`💣 ${DIFFICULTY[game.difficulty]?.name}\n${game.getStats()}`, renderGame(game, false));
+  } else {
+    await ctx.answerCbQuery('❌ بازی تموم شده');
+  }
+});
+
 // ================== BOT ACTIONS ==================
 bot.start(async (ctx) => {
   const userId = ctx.from.id;
@@ -550,7 +779,7 @@ bot.start(async (ctx) => {
   }
   
   await ctx.reply(
-    `🎯 به Minesweeper PRO v5.1 خوش اومدی!\n\n👤 ${user.name}\n💰 سکه: ${user.coins}\n🏆 برد: ${user.wins} | باخت: ${user.losses}\n🔥 استریک: ${user.currentStreak || 0}\n🎨 تم: ${THEMES[user.theme].name}\n\n⚡ از دکمه‌های زیر استفاده کن:`,
+    `🎯 به Minesweeper PRO v5.2 خوش اومدی!\n\n👤 ${user.name}\n💰 سکه: ${user.coins}\n🏆 برد: ${user.wins} | باخت: ${user.losses}\n🔥 استریک: ${user.currentStreak || 0}\n🎨 تم: ${THEMES[user.theme].name}\n\n⚡ از دکمه‌های زیر استفاده کن:`,
     getMainMenu()
   );
 });
@@ -778,7 +1007,7 @@ bot.action('my_stats', async (ctx) => {
 
 bot.action('help', async (ctx) => {
   await ctx.editMessageText(
-    `📖 راهنمای v5.1:\n\n🎯 هدف: همه سلول‌های بدون مین رو باز کن\n\n🕹️ کنترل‌ها:\n• کلیک عادی: باز کردن سلول\n• حالت 🚩 Flag: پرچم گذاری روی مین\n• 🔍 Auto: باز کردن خودکار خانه‌های امن\n\n💰 سیستم جایزه:\n• برد در هر سطح: سکه میگیری\n• دستاوردها: سکه اضافه\n• استریک: برد متوالی جایزه داره\n• لیدربورد: رقابت با دیگران\n\n🎨 تم‌ها:\n• از بخش تنظیمات میتونی ظاهر بازی رو عوض کنی\n• تم‌های جدید با سکه قابل خریدن`,
+    `📖 راهنمای v5.2:\n\n🎯 هدف: همه سلول‌های بدون مین رو باز کن\n\n🕹️ کنترل‌ها:\n• کلیک عادی: باز کردن سلول\n• حالت 🚩 Flag: پرچم گذاری روی مین\n• 🔍 Auto: باز کردن خودکار خانه‌های امن\n• 🧰 آیتم‌ها: استفاده از آیتم‌های خریداری شده\n\n💰 سیستم جایزه:\n• برد در هر سطح: سکه میگیری\n• دستاوردها: سکه اضافه\n• استریک: برد متوالی جایزه داره\n• لیدربورد: رقابت با دیگران\n\n🎨 تم‌ها:\n• از بخش تنظیمات میتونی ظاهر بازی رو عوض کنی\n• تم‌های جدید با سکه قابل خریدن\n\n🧰 آیتم‌های جدید:\n• 🔦 مین‌یاب: یک مین رو نشون میده\n• 🧠 حسگر هوشمند: بهترین خونه امن رو پیشنهاد میده\n• ⏰ فریز زمان: +۳۰ ثانیه به زمان\n• 🔥 جایزه دوبرابر: برد بعدی ×۲ سکه\n• 🛡️ سپر محافظ: یک بار مرگ رو نجات میده`,
     { reply_markup: { inline_keyboard: [[{ text: '🔙 برگشت', callback_data: 'main_menu', style: 'primary' }]] } }
   );
 });
@@ -843,12 +1072,18 @@ bot.action('auto_reveal', async (ctx) => {
     if (game.checkWin()) {
       game.alive = false;
       const user = getUser(ctx.from.id);
-      user.coins += DIFFICULTY[game.difficulty].coin;
+      let coinReward = DIFFICULTY[game.difficulty].coin;
+      if (user.inventory?.double_reward > 0 && !game.doubleRewardActive) {
+        game.doubleRewardActive = true;
+        user.inventory.double_reward--;
+        coinReward *= 2;
+      }
+      user.coins += coinReward;
       user.wins++;
       user.gamesPlayed++;
       updateStreak(ctx.from.id, true);
       updateUser(user);
-      await ctx.editMessageText(`🎉 بردی! 🎉\n💰 +${DIFFICULTY[game.difficulty].coin} سکه\n${game.getStats()}`, renderGame(game, true));
+      await ctx.editMessageText(`🎉 بردی! 🎉\n💰 +${coinReward} سکه\n${game.getStats()}`, renderGame(game, true));
     } else {
       await ctx.editMessageText(`💣 ${DIFFICULTY[game.difficulty]?.name}\n${game.getStats()}`, renderGame(game, false));
     }
@@ -858,25 +1093,49 @@ bot.action('auto_reveal', async (ctx) => {
   }
 });
 
+// ================== SHOP MENU ==================
 bot.action('shop_menu', async (ctx) => {
   const user = getUser(ctx.from.id);
-  let msg = '🛒 فروشگاه آیتم‌ها:\n\n';
-  for (const [key, item] of Object.entries(SHOP)) {
-    msg += `${item.name}\n   ${item.desc}\n   💰 ${item.price} سکه\n`;
-    if (user.inventory?.[key]) msg += `   📦 موجودی: ${user.inventory[key]}\n`;
-    msg += '\n';
+  let msg = '🛒 فروشگاه آیتم‌ها:\n━━━━━━━━━━━━━━━\n\n';
+  
+  const shopItems = [
+    { key: 'bomb_disabler', emoji: '💣', name: 'مین‌شکن', desc: 'یه مین رو نابود کن', price: 50 },
+    { key: 'extra_life', emoji: '❤️', name: 'جان اضافه', desc: 'یه بار میتونی اشتباه کنی', price: 75 },
+    { key: 'mine_detector', emoji: '🔦', name: 'مین‌یاب', desc: 'یک مین رو نشون میده', price: 120 },
+    { key: 'smart_hint', emoji: '🧠', name: 'حسگر هوشمند', desc: 'بهترین خونه امن رو پیشنهاد میده', price: 90 },
+    { key: 'time_freeze', emoji: '⏰', name: 'فریز زمان', desc: '+۳۰ ثانیه به زمان', price: 80 },
+    { key: 'double_reward', emoji: '🔥', name: 'جایزه دوبرابر', desc: 'برد بعدی ×۲ سکه', price: 200 },
+    { key: 'shield', emoji: '🛡️', name: 'سپر محافظ', desc: 'یک بار مرگ رو نجات میده', price: 150 }
+  ];
+  
+  for (const item of shopItems) {
+    const count = user.inventory?.[item.key] || 0;
+    msg += `${item.emoji} **${item.name}**\n`;
+    msg += `   📝 ${item.desc}\n`;
+    msg += `   💰 ${item.price} سکه\n`;
+    if (count > 0) msg += `   📦 موجودی: ${count}\n`;
+    msg += `\n`;
   }
-  await ctx.editMessageText(msg, {
+  
+  const keyboard = {
     reply_markup: {
       inline_keyboard: [
         [{ text: '💣 خرید مین‌شکن (۵۰)', callback_data: 'buy_bomb_disabler', style: 'success' }],
         [{ text: '❤️ خرید جان اضافه (۷۵)', callback_data: 'buy_extra_life', style: 'success' }],
+        [{ text: '🔦 خرید مین‌یاب (۱۲۰)', callback_data: 'buy_mine_detector', style: 'primary' }],
+        [{ text: '🧠 خرید حسگر هوشمند (۹۰)', callback_data: 'buy_smart_hint', style: 'primary' }],
+        [{ text: '⏰ خرید فریز زمان (۸۰)', callback_data: 'buy_time_freeze', style: 'primary' }],
+        [{ text: '🔥 خرید جایزه دوبرابر (۲۰۰)', callback_data: 'buy_double_reward', style: 'danger' }],
+        [{ text: '🛡️ خرید سپر محافظ (۱۵۰)', callback_data: 'buy_shield', style: 'primary' }],
         [{ text: '🔙 برگشت', callback_data: 'main_menu', style: 'primary' }]
       ]
     }
-  });
+  };
+  
+  await ctx.editMessageText(msg, keyboard);
 });
 
+// خرید آیتم‌ها
 bot.action('buy_bomb_disabler', async (ctx) => {
   const user = getUser(ctx.from.id);
   if (user.coins >= 50) {
@@ -885,7 +1144,7 @@ bot.action('buy_bomb_disabler', async (ctx) => {
     user.inventory.bomb_disabler = (user.inventory.bomb_disabler || 0) + 1;
     updateUser(user);
     await ctx.answerCbQuery('✅ مین‌شکن خریداری شد!', true);
-    await ctx.editMessageText('✅ خرید انجام شد!', { reply_markup: { inline_keyboard: [[{ text: '🔙 برگشت', callback_data: 'main_menu', style: 'primary' }]] } });
+    await ctx.editMessageText('✅ مین‌شکن به انبارت اضافه شد!', { reply_markup: { inline_keyboard: [[{ text: '🔙 برگشت', callback_data: 'main_menu', style: 'primary' }]] } });
   } else {
     await ctx.answerCbQuery('❌ سکه کافی نیست!', true);
   }
@@ -899,7 +1158,77 @@ bot.action('buy_extra_life', async (ctx) => {
     user.inventory.extra_life = (user.inventory.extra_life || 0) + 1;
     updateUser(user);
     await ctx.answerCbQuery('❤️ جان اضافه خریداری شد!', true);
-    await ctx.editMessageText('✅ خرید انجام شد!', { reply_markup: { inline_keyboard: [[{ text: '🔙 برگشت', callback_data: 'main_menu', style: 'primary' }]] } });
+    await ctx.editMessageText('✅ جان اضافه به انبارت اضافه شد!', { reply_markup: { inline_keyboard: [[{ text: '🔙 برگشت', callback_data: 'main_menu', style: 'primary' }]] } });
+  } else {
+    await ctx.answerCbQuery('❌ سکه کافی نیست!', true);
+  }
+});
+
+bot.action('buy_mine_detector', async (ctx) => {
+  const user = getUser(ctx.from.id);
+  if (user.coins >= 120) {
+    user.coins -= 120;
+    if (!user.inventory) user.inventory = {};
+    user.inventory.mine_detector = (user.inventory.mine_detector || 0) + 1;
+    updateUser(user);
+    await ctx.answerCbQuery('✅ مین‌یاب خریداری شد! 🔦', true);
+    await ctx.editMessageText('✅ مین‌یاب به انبارت اضافه شد!', { reply_markup: { inline_keyboard: [[{ text: '🔙 برگشت', callback_data: 'main_menu', style: 'primary' }]] } });
+  } else {
+    await ctx.answerCbQuery('❌ سکه کافی نیست!', true);
+  }
+});
+
+bot.action('buy_smart_hint', async (ctx) => {
+  const user = getUser(ctx.from.id);
+  if (user.coins >= 90) {
+    user.coins -= 90;
+    if (!user.inventory) user.inventory = {};
+    user.inventory.smart_hint = (user.inventory.smart_hint || 0) + 1;
+    updateUser(user);
+    await ctx.answerCbQuery('✅ حسگر هوشمند خریداری شد! 🧠', true);
+    await ctx.editMessageText('✅ حسگر هوشمند به انبارت اضافه شد!', { reply_markup: { inline_keyboard: [[{ text: '🔙 برگشت', callback_data: 'main_menu', style: 'primary' }]] } });
+  } else {
+    await ctx.answerCbQuery('❌ سکه کافی نیست!', true);
+  }
+});
+
+bot.action('buy_time_freeze', async (ctx) => {
+  const user = getUser(ctx.from.id);
+  if (user.coins >= 80) {
+    user.coins -= 80;
+    if (!user.inventory) user.inventory = {};
+    user.inventory.time_freeze = (user.inventory.time_freeze || 0) + 1;
+    updateUser(user);
+    await ctx.answerCbQuery('✅ فریز زمان خریداری شد! ⏰', true);
+    await ctx.editMessageText('✅ فریز زمان به انبارت اضافه شد!', { reply_markup: { inline_keyboard: [[{ text: '🔙 برگشت', callback_data: 'main_menu', style: 'primary' }]] } });
+  } else {
+    await ctx.answerCbQuery('❌ سکه کافی نیست!', true);
+  }
+});
+
+bot.action('buy_double_reward', async (ctx) => {
+  const user = getUser(ctx.from.id);
+  if (user.coins >= 200) {
+    user.coins -= 200;
+    if (!user.inventory) user.inventory = {};
+    user.inventory.double_reward = (user.inventory.double_reward || 0) + 1;
+    updateUser(user);
+    await ctx.answerCbQuery('✅ جایزه دوبرابر خریداری شد! 🔥', true);
+    await ctx.editMessageText('✅ جایزه دوبرابر به انبارت اضافه شد! برد بعدیت دوبرابر سکه داره!', { reply_markup: { inline_keyboard: [[{ text: '🔙 برگشت', callback_data: 'main_menu', style: 'primary' }]] } });
+  } else {
+    await ctx.answerCbQuery('❌ سکه کافی نیست!', true);
+  }
+});
+
+bot.action('buy_shield', async (ctx) => {
+  const user = getUser(ctx.from.id);
+  if (user.coins >= 150) {
+    user.coins -= 150;
+    if (!user.inventory) user.inventory = {};
+    user.inventory.shield = (user.inventory.shield || 0) + 1;
+    updateUser(user);
+    await ctx.answerCbQuery('✅ سپر محافظ خریداری شد! 🛡️', true);
+    await ctx.editMessageText('✅ سپر محافظ به انبارت اضافه شد!', { reply_markup: { inline_keyboard: [[{ text: '🔙 برگشت', callback_data: 'main_menu', style: 'primary' }]] } });
   } else {
     await ctx.answerCbQuery('❌ سکه کافی نیست!', true);
   }
@@ -925,7 +1254,7 @@ bot.catch((err, ctx) => {
 
 // ================== LAUNCH ==================
 bot.launch()
-  .then(() => console.log('🚀 Minesweeper PRO v5.1 Running!'))
+  .then(() => console.log('🚀 Minesweeper PRO v5.2 Running!'))
   .catch(console.error);
 
 process.once('SIGINT', () => bot.stop('SIGINT'));
