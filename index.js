@@ -607,6 +607,7 @@ async function handleCellClick(ctx, game, idx) {
       game.doubleRewardActive = true;
       user.inventory.double_reward--;
       coinReward *= 2;
+      updateUser(user);
     }
 
     // === استریک ===
@@ -615,6 +616,9 @@ async function handleCellClick(ctx, game, idx) {
     // === XP ===
     const xpGain = 10 + (game.difficulty === 'expert' ? 30 : 0) + Math.floor(newStreak * 1.5);
     const levelUpMsg = addXP(userId, xpGain);
+
+    // 🔥 مهم: دوباره user رو بگیر (چون addXP مقادیر رو تغییر داده)
+    user = getUser(userId);
 
     // === آپدیت آمار ===
     user.coins += coinReward;
@@ -1250,11 +1254,15 @@ bot.action('auto_reveal', async (ctx) => {
         game.doubleRewardActive = true;
         user.inventory.double_reward--;
         coinReward *= 2;
+        updateUser(user);
       }
       
       const newStreak = updateStreak(ctx.from.id, true);
       const xpGain = 10 + (game.difficulty === 'expert' ? 30 : 0) + Math.floor(newStreak * 1.5);
       const levelUpMsg = addXP(ctx.from.id, xpGain);
+      
+      // 🔥 مهم: دوباره user رو بگیر
+      user = getUser(ctx.from.id);
       
       user.coins += coinReward;
       user.wins++;
@@ -1432,7 +1440,7 @@ bot.catch((err, ctx) => {
 
 // ================== LAUNCH ==================
 bot.launch()
-  .then(() => console.log('🚀 Minesweeper PRO v5.5 Running!'))
+  .then(() => console.log('🚀 Minesweeper PRO v5.5 Final Running!'))
   .catch(console.error);
 
 process.once('SIGINT', () => bot.stop('SIGINT'));
