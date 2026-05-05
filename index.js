@@ -178,14 +178,12 @@ const bot = new Telegraf(process.env.BOT_TOKEN);
 const games = new Map();
 let flagMode = new Map();
 
-// ================== MAIN MENU BUTTONS (طراحی جدید) ==================
+// ================== MAIN MENU BUTTONS ==================
 function getMainMenu() {
   return {
     reply_markup: {
       inline_keyboard: [
-        [
-          { text: '🎮 شروع بازی', callback_data: 'new_game', style: 'primary' }
-        ],
+        [{ text: '🎮 شروع بازی', callback_data: 'new_game', style: 'primary' }],
         [
           { text: '🛒 فروشگاه', callback_data: 'shop_menu', style: 'success' },
           { text: '🎨 تم‌ها', callback_data: 'settings_menu', style: 'primary' },
@@ -210,13 +208,11 @@ function addXP(userId, amount) {
   const user = getUser(userId);
   user.xp += amount;
   let levelUpMsg = '';
-  let leveledUp = false;
   
   for (let i = user.level; i < LEVELS.length; i++) {
     const nextLevel = LEVELS[i];
     if (user.xp >= nextLevel.xp_needed) {
       user.level = nextLevel.level;
-      leveledUp = true;
       levelUpMsg += `\n🎉 **سطح ${nextLevel.level}** رسیدی! ${nextLevel.name}\n💰 +${nextLevel.coin_bonus} سکه پاداش سطح!\n`;
       user.coins += nextLevel.coin_bonus;
     } else {
@@ -225,7 +221,7 @@ function addXP(userId, amount) {
   }
   
   updateUser(user);
-  return leveledUp ? levelUpMsg : '';
+  return levelUpMsg;
 }
 
 function getCurrentLevelInfo(xp) {
@@ -280,16 +276,15 @@ function getLeaderboard(type, stat) {
 
 function updateStreak(userId, win) {
   const user = getUser(userId);
-  let newStreak = user.currentStreak || 0;
+  let newStreak = 0;
   
   if (win) {
-    newStreak = newStreak + 1;
+    newStreak = (user.currentStreak || 0) + 1;
     user.currentStreak = newStreak;
     if (newStreak > (user.bestStreak || 0)) {
       user.bestStreak = newStreak;
     }
   } else {
-    newStreak = 0;
     user.currentStreak = 0;
   }
   
@@ -556,7 +551,7 @@ async function handleCellClick(ctx, game, idx) {
     return false;
   }
   
-  const user = getUser(userId);
+  let user = getUser(userId);
   
   if (game.board[idx] === '💣' && user.inventory?.bomb_disabler > 0) {
     user.inventory.bomb_disabler--;
@@ -595,7 +590,7 @@ async function handleCellClick(ctx, game, idx) {
     user.gamesPlayed++;
     updateStreak(userId, false);
     updateUser(user);
-    await ctx.editMessageText(`💥 باختی! 💀\n\n${game.getStats()}\n💰 سکه: ${user.coins}\n🔥 استریک شما: 0`, renderGame(game, true));
+    await ctx.editMessageText(`💥 باختی! 💀\n\n${game.getStats()}\n🔥 استریک فعلی: 0`, renderGame(game, true));
     return false;
   }
   
@@ -612,18 +607,16 @@ async function handleCellClick(ctx, game, idx) {
       game.doubleRewardActive = true;
       user.inventory.double_reward--;
       coinReward *= 2;
-      updateUser(user);
-      await ctx.answerCbQuery('🔥 جایزه دوبرابر فعال شد!', true);
     }
 
-    // استریک
+    // === استریک ===
     const newStreak = updateStreak(userId, true);
 
-    // XP
+    // === XP ===
     const xpGain = 10 + (game.difficulty === 'expert' ? 30 : 0) + Math.floor(newStreak * 1.5);
     const levelUpMsg = addXP(userId, xpGain);
 
-    // آمار
+    // === آپدیت آمار ===
     user.coins += coinReward;
     user.wins++;
     user.gamesPlayed++;
@@ -638,7 +631,7 @@ async function handleCellClick(ctx, game, idx) {
 
     updateUser(user);
 
-    // دستاوردها
+    // === دستاوردها ===
     let achievementMsg = '';
     const checks = ['FIRST_WIN', 'EXPERT', 'SPEEDRUN', 'PERFECT', 'LUCKY', 'STREAK_5', 'STREAK_10'];
     for (const ach of checks) {
@@ -706,7 +699,7 @@ bot.action('use_items_menu', async (ctx) => {
   }
   
   if (user.inventory?.smart_hint > 0) {
-    msg += `🧠 حسگر هوشمند (${user.inventory.smart_hint} عدد)\n   بهترین خونه امن رو نشون میده\n\n`;
+    msg += `🧠 حسگر هوشمند (${user.inventory.smart_hint} عدد)\n   بهترین خونه امن رو پیشنهاد میده\n\n`;
     keyboardButtons.push([{ text: `🧠 استفاده از حسگر`, callback_data: 'use_smart_hint', style: 'primary' }]);
   }
   
@@ -1250,7 +1243,7 @@ bot.action('auto_reveal', async (ctx) => {
   if (changed) {
     if (game.checkWin()) {
       game.alive = false;
-      const user = getUser(ctx.from.id);
+      let user = getUser(ctx.from.id);
       let coinReward = DIFFICULTY[game.difficulty].coin;
       
       if (user.inventory?.double_reward > 0 && !game.doubleRewardActive) {
