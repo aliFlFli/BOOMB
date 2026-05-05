@@ -14,15 +14,15 @@ const DIFFICULTY = {
 // ================== LEVELING SYSTEM ==================
 const LEVELS = [
   { level: 1, xp_needed: 0, name: '🌱 تازه‌کار', coin_bonus: 0 },
-  { level: 2, xp_needed: 100, name: '⭐ مبتدی', coin_bonus: 5 },
-  { level: 3, xp_needed: 250, name: '🔰 آشنای حرفه', coin_bonus: 10 },
-  { level: 4, xp_needed: 500, name: '🎯 ماهر', coin_bonus: 15 },
-  { level: 5, xp_needed: 1000, name: '🔥 حرفه‌ای', coin_bonus: 25 },
-  { level: 6, xp_needed: 1500, name: '💎 استاد', coin_bonus: 40 },
-  { level: 7, xp_needed: 2500, name: '👑 افسانه‌ای', coin_bonus: 60 },
-  { level: 8, xp_needed: 4000, name: '⚡ قهرمان', coin_bonus: 85 },
-  { level: 9, xp_needed: 6000, name: '🎖️ سوپراستار', coin_bonus: 120 },
-  { level: 10, xp_needed: 10000, name: '🏆 خدا', coin_bonus: 200 }
+  { level: 2, xp_needed: 50, name: '⭐ مبتدی', coin_bonus: 5 },
+  { level: 3, xp_needed: 120, name: '🔰 آشنای حرفه', coin_bonus: 10 },
+  { level: 4, xp_needed: 250, name: '🎯 ماهر', coin_bonus: 15 },
+  { level: 5, xp_needed: 500, name: '🔥 حرفه‌ای', coin_bonus: 25 },
+  { level: 6, xp_needed: 900, name: '💎 استاد', coin_bonus: 40 },
+  { level: 7, xp_needed: 1500, name: '👑 افسانه‌ای', coin_bonus: 60 },
+  { level: 8, xp_needed: 2500, name: '⚡ قهرمان', coin_bonus: 85 },
+  { level: 9, xp_needed: 4000, name: '🎖️ سوپراستار', coin_bonus: 120 },
+  { level: 10, xp_needed: 6000, name: '🏆 خدا', coin_bonus: 200 }
 ];
 
 // ================== THEMES ==================
@@ -38,13 +38,14 @@ const THEMES = {
 
 // ================== KEEP ALIVE ==================
 const app = express();
-app.get('/', (req, res) => res.send('🎮 Minesweeper PRO v5.3 is alive'));
+app.get('/', (req, res) => res.send('🎮 Minesweeper PRO v5.4 is alive'));
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log('🌐 Server on', PORT));
 
 // ================== DATABASE ==================
 const db = new Database('minesweeper.db');
 
+// اضافه کردن فیلدهای جدید اگه نیستن
 db.exec(`
   CREATE TABLE IF NOT EXISTS users (
     user_id INTEGER PRIMARY KEY,
@@ -178,28 +179,23 @@ const bot = new Telegraf(process.env.BOT_TOKEN);
 const games = new Map();
 let flagMode = new Map();
 
-// ================== MAIN MENU BUTTONS ==================
+// ================== MAIN MENU BUTTONS (طراحی جدید) ==================
 function getMainMenu() {
   return {
     reply_markup: {
       inline_keyboard: [
         [{ text: '🎮 شروع بازی', callback_data: 'new_game', style: 'primary' }],
         [
-          { text: '💰 کیف پول', callback_data: 'wallet', style: 'success' },
-          { text: '🛒 فروشگاه', callback_data: 'shop_menu', style: 'success' }
+          { text: '🛒 فروشگاه', callback_data: 'shop_menu', style: 'success' },
+          { text: '🎨 تم‌ها', callback_data: 'settings_menu', style: 'primary' },
+          { text: '💰 کیف پول', callback_data: 'wallet', style: 'success' }
         ],
         [
-          { text: '🏆 دستاوردها', callback_data: 'achievements', style: 'primary' },
-          { text: '🏆 لیدربورد', callback_data: 'leaderboard_menu', style: 'primary' }
+          { text: '🏆 لیدربورد', callback_data: 'leaderboard_menu', style: 'primary' },
+          { text: '⭐ سطح من', callback_data: 'level_info', style: 'primary' },
+          { text: '📊 آمار من', callback_data: 'my_stats', style: 'primary' }
         ],
-        [
-          { text: '🎨 تم ها', callback_data: 'settings_menu', style: 'primary' },
-          { text: '⭐ سطح من', callback_data: 'level_info', style: 'primary' }
-        ],
-        [
-          { text: '📊 آمار من', callback_data: 'my_stats', style: 'primary' },
-          { text: '❓ راهنما', callback_data: 'help', style: 'danger' }
-        ]
+        [{ text: '❓ راهنما', callback_data: 'help', style: 'danger' }]
       ]
     }
   };
@@ -280,22 +276,27 @@ function getLeaderboard(type, stat) {
 
 function updateStreak(userId, win) {
   const user = getUser(userId);
+  let newStreak = 0;
+  
   if (win) {
-    user.currentStreak = (user.currentStreak || 0) + 1;
-    if (user.currentStreak > (user.bestStreak || 0)) {
-      user.bestStreak = user.currentStreak;
+    newStreak = (user.currentStreak || 0) + 1;
+    user.currentStreak = newStreak;
+    if (newStreak > (user.bestStreak || 0)) {
+      user.bestStreak = newStreak;
     }
-    if (user.currentStreak >= 5) {
-      checkAchievement(userId, 'STREAK_5', { streak: user.currentStreak });
+    if (newStreak >= 5) {
+      checkAchievement(userId, 'STREAK_5', { streak: newStreak });
     }
-    if (user.currentStreak >= 10) {
-      checkAchievement(userId, 'STREAK_10', { streak: user.currentStreak });
+    if (newStreak >= 10) {
+      checkAchievement(userId, 'STREAK_10', { streak: newStreak });
     }
   } else {
     user.currentStreak = 0;
+    newStreak = 0;
   }
+  
   updateUser(user);
-  return user.currentStreak;
+  return newStreak;
 }
 
 function resetWeeklyStats() {
@@ -630,13 +631,17 @@ async function handleCellClick(ctx, game, idx) {
       await ctx.answerCbQuery('🔥 جایزه دوبرابر فعال شد!', true);
     }
     
-    // اول استریک رو آپدیت کن
+    // ذخیره اطلاعات قبل از آپدیت استریک
+    const oldStreak = user.currentStreak || 0;
+    
+    // آپدیت استریک و گرفتن مقدار جدید
     const newStreak = updateStreak(userId, true);
     
-    // بعد XP رو حساب کن
+    // محاسبه XP با استریک جدید
     const xpGain = 10 + (game.difficulty === 'expert' ? 30 : 0) + newStreak;
     const levelUpMsg = addXP(userId, xpGain);
     
+    // آپدیت بقیه آمارها
     user.coins += coinReward;
     user.wins++;
     user.gamesPlayed++;
@@ -661,15 +666,17 @@ async function handleCellClick(ctx, game, idx) {
     }
     achievements.forEach(ach => { achievementMsg += `\n🏆 ${ach.name} +${ach.coin} سکه!`; });
     
+    // گرفتن اطلاعات نهایی کاربر
     const finalUser = getUser(userId);
+    
     await ctx.editMessageText(
       `🎉 **بردی!** 🎉\n\n` +
       `⏱️ زمان: ${gameTime} ثانیه\n` +
       `🎯 حرکت: ${game.actualClicks}\n` +
       `💰 +${coinReward} سکه\n` +
-      `🔥 استریک: ${finalUser.currentStreak}\n` +
+      `🔥 استریک: ${finalUser.currentStreak} (قدیمی: ${oldStreak} → جدید: ${newStreak})\n` +
       `✨ +${xpGain} XP${levelUpMsg}${achievementMsg}\n\n` +
-      `📊 کل سکه: ${finalUser.coins}`,
+      `📊 کل سکه: ${finalUser.coins} | سطح: ${finalUser.level}`,
       renderGame(game, true)
     );
     return true;
@@ -715,7 +722,7 @@ bot.action('use_items_menu', async (ctx) => {
   }
   
   if (user.inventory?.smart_hint > 0) {
-    msg += `🧠 حسگر هوشمند (${user.inventory.smart_hint} عدد)\n   بهترین خونه امن رو نشون میده\n\n`;
+    msg += `🧠 حسگر هوشمند (${user.inventory.smart_hint} عدد)\n   بهترین خونه امن رو پیشنهاد میده\n\n`;
     keyboardButtons.push([{ text: `🧠 استفاده از حسگر`, callback_data: 'use_smart_hint', style: 'primary' }]);
   }
   
@@ -887,10 +894,8 @@ bot.start(async (ctx) => {
     updateUser(user);
   }
   
-  const levelInfo = getCurrentLevelInfo(user.xp);
-  
   await ctx.reply(
-    `🎯 به Minesweeper PRO v5.3 خوش اومدی!\n\n👤 ${user.name}\n💰 سکه: ${user.coins}\n🏆 برد: ${user.wins} | باخت: ${user.losses}\n🔥 استریک: ${user.currentStreak || 0}\n⭐ سطح ${user.level} | ${LEVELS[user.level-1]?.name || 'قهرمان'}\n🎨 تم: ${THEMES[user.theme].name}\n\n⚡ از دکمه‌های زیر استفاده کن:`,
+    `🎯 به Minesweeper PRO v5.4 خوش اومدی!\n\n👤 ${user.name}\n💰 سکه: ${user.coins}\n🏆 برد: ${user.wins} | باخت: ${user.losses}\n🔥 استریک: ${user.currentStreak || 0}\n⭐ سطح ${user.level} | ${LEVELS[user.level-1]?.name || 'قهرمان'}\n🎨 تم: ${THEMES[user.theme].name}\n\n⚡ از دکمه‌های زیر استفاده کن:`,
     getMainMenu()
   );
 });
@@ -1130,7 +1135,7 @@ bot.action('lb_level', async (ctx) => {
 // ================== OTHER MENUS ==================
 bot.action('wallet', async (ctx) => {
   const user = getUser(ctx.from.id);
-  await ctx.editMessageText(`💰 کیف پول شما\n\nسکه: ${user.coins} 🪙\n\n🎮 هر برد: +${DIFFICULTY.easy.coin}-${DIFFICULTY.expert.coin} سکه\n🏆 دستاوردها: سکه اضافه میدن\n🔥 استریک: ${user.currentStreak || 0}\n⭐ سطح: ${user.level}`, {
+  await ctx.editMessageText(`💰 کیف پول شما\n\nسکه: ${user.coins} 🪙\n\n🎮 هر برد: +${DIFFICULTY.easy.coin}-${DIFFICULTY.expert.coin} سکه\n🏆 دستاوردها: سکه اضافه میدن\n🔥 استریک فعلی: ${user.currentStreak || 0}\n⭐ سطح: ${user.level}`, {
     reply_markup: { inline_keyboard: [[{ text: '🔙 برگشت', callback_data: 'main_menu', style: 'primary' }]] }
   });
 });
@@ -1173,7 +1178,7 @@ bot.action('my_stats', async (ctx) => {
 
 bot.action('help', async (ctx) => {
   await ctx.editMessageText(
-    `📖 **راهنمای v5.3**\n\n` +
+    `📖 **راهنمای v5.4**\n\n` +
     `🎯 **هدف:** همه سلول‌های بدون مین رو باز کن\n\n` +
     `🕹️ **کنترل‌ها:**\n` +
     `• کلیک عادی: باز کردن سلول\n` +
@@ -1278,7 +1283,7 @@ bot.action('auto_reveal', async (ctx) => {
       user.gamesPlayed++;
       updateUser(user);
       
-      await ctx.editMessageText(`🎉 بردی! 🎉\n💰 +${coinReward} سکه\n✨ +${xpGain} XP${levelUpMsg}\n🔥 استریک: ${newStreak}\n${game.getStats()}`, renderGame(game, true));
+      await ctx.editMessageText(`🎉 بردی! 🎉\n💰 +${coinReward} سکه\n✨ +${xpGain} XP${levelUpMsg}\n🔥 استریک جدید: ${newStreak}\n${game.getStats()}`, renderGame(game, true));
     } else {
       await ctx.editMessageText(`💣 ${DIFFICULTY[game.difficulty]?.name}\n${game.getStats()}`, renderGame(game, false));
     }
@@ -1449,7 +1454,7 @@ bot.catch((err, ctx) => {
 
 // ================== LAUNCH ==================
 bot.launch()
-  .then(() => console.log('🚀 Minesweeper PRO v5.3 Running!'))
+  .then(() => console.log('🚀 Minesweeper PRO v5.4 Running!'))
   .catch(console.error);
 
 process.once('SIGINT', () => bot.stop('SIGINT'));
