@@ -295,6 +295,7 @@ function updateStreak(userId, win) {
     user.currentStreak = 0;
   }
   updateUser(user);
+  return user.currentStreak;
 }
 
 function resetWeeklyStats() {
@@ -629,6 +630,13 @@ async function handleCellClick(ctx, game, idx) {
       await ctx.answerCbQuery('🔥 جایزه دوبرابر فعال شد!', true);
     }
     
+    // اول استریک رو آپدیت کن
+    const newStreak = updateStreak(userId, true);
+    
+    // بعد XP رو حساب کن
+    const xpGain = 10 + (game.difficulty === 'expert' ? 30 : 0) + newStreak;
+    const levelUpMsg = addXP(userId, xpGain);
+    
     user.coins += coinReward;
     user.wins++;
     user.gamesPlayed++;
@@ -639,17 +647,11 @@ async function handleCellClick(ctx, game, idx) {
     user.weeklyScore = (user.weeklyScore || 0) + scoreGain;
     
     if (game.difficulty === 'expert') user.expertWins++;
-    
     if (!user.bestTime || gameTime < user.bestTime) user.bestTime = gameTime;
-    
-    updateStreak(userId, true);
-    
-    // اضافه کردن XP
-    const xpGain = 10 + (game.difficulty === 'expert' ? 30 : 0) + (user.currentStreak > 0 ? user.currentStreak : 0);
-    const levelUpMsg = addXP(userId, xpGain);
     
     updateUser(user);
     
+    // چک کردن دستاوردها
     let achievementMsg = '';
     const achievements = [];
     const checks = ['FIRST_WIN', 'EXPERT', 'SPEEDRUN', 'PERFECT', 'LUCKY'];
@@ -659,8 +661,15 @@ async function handleCellClick(ctx, game, idx) {
     }
     achievements.forEach(ach => { achievementMsg += `\n🏆 ${ach.name} +${ach.coin} سکه!`; });
     
+    const finalUser = getUser(userId);
     await ctx.editMessageText(
-      `🎉 بردی! 🎉\n⏱️ زمان: ${gameTime} ثانیه\n🎯 حرکت: ${game.actualClicks}\n💰 +${coinReward} سکه\n🔥 استریک: ${user.currentStreak}\n✨ +${xpGain} XP${levelUpMsg}${achievementMsg}\n📊 کل سکه: ${user.coins}`,
+      `🎉 **بردی!** 🎉\n\n` +
+      `⏱️ زمان: ${gameTime} ثانیه\n` +
+      `🎯 حرکت: ${game.actualClicks}\n` +
+      `💰 +${coinReward} سکه\n` +
+      `🔥 استریک: ${finalUser.currentStreak}\n` +
+      `✨ +${xpGain} XP${levelUpMsg}${achievementMsg}\n\n` +
+      `📊 کل سکه: ${finalUser.coins}`,
       renderGame(game, true)
     );
     return true;
@@ -1176,7 +1185,7 @@ bot.action('help', async (ctx) => {
     `• دستاوردها: سکه اضافه\n` +
     `• استریک: برد متوالی جایزه داره\n` +
     `• لیدربورد: رقابت با دیگران\n\n` +
-    `✨ **سیستم سطح (جدید!):**\n` +
+    `✨ **سیستم سطح:**\n` +
     `• با برد XP میگیری\n` +
     `• سطح بالاتر = پاداش بیشتر\n` +
     `• استریک به XP اضافه میشه\n\n` +
@@ -1259,14 +1268,17 @@ bot.action('auto_reveal', async (ctx) => {
         user.inventory.double_reward--;
         coinReward *= 2;
       }
+      
+      const newStreak = updateStreak(ctx.from.id, true);
+      const xpGain = 10 + (game.difficulty === 'expert' ? 30 : 0) + newStreak;
+      const levelUpMsg = addXP(ctx.from.id, xpGain);
+      
       user.coins += coinReward;
       user.wins++;
       user.gamesPlayed++;
-      updateStreak(ctx.from.id, true);
-      const xpGain = 10 + (game.difficulty === 'expert' ? 30 : 0) + (user.currentStreak > 0 ? user.currentStreak : 0);
-      const levelUpMsg = addXP(ctx.from.id, xpGain);
       updateUser(user);
-      await ctx.editMessageText(`🎉 بردی! 🎉\n💰 +${coinReward} سکه\n✨ +${xpGain} XP${levelUpMsg}\n${game.getStats()}`, renderGame(game, true));
+      
+      await ctx.editMessageText(`🎉 بردی! 🎉\n💰 +${coinReward} سکه\n✨ +${xpGain} XP${levelUpMsg}\n🔥 استریک: ${newStreak}\n${game.getStats()}`, renderGame(game, true));
     } else {
       await ctx.editMessageText(`💣 ${DIFFICULTY[game.difficulty]?.name}\n${game.getStats()}`, renderGame(game, false));
     }
