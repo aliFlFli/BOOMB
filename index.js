@@ -207,15 +207,19 @@ function updateStreak(userId, win) {
     user.currentStreak = (user.currentStreak || 0) + 1;
     if (user.currentStreak > (user.bestStreak || 0)) {
       user.bestStreak = user.currentStreak;
-      if (user.bestStreak >= 5) checkAchievement(userId, 'STREAK_5', { streak: user.bestStreak });
-      if (user.bestStreak >= 10) checkAchievement(userId, 'STREAK_10', { streak: user.bestStreak });
+    }
+    // چک کردن دستاوردهای استریک با currentStreak جدید
+    if (user.currentStreak >= 5) {
+      checkAchievement(userId, 'STREAK_5', { streak: user.currentStreak });
+    }
+    if (user.currentStreak >= 10) {
+      checkAchievement(userId, 'STREAK_10', { streak: user.currentStreak });
     }
   } else {
     user.currentStreak = 0;
   }
   updateUser(user);
 }
-
 function resetWeeklyStats() {
   const users = db.prepare('SELECT user_id FROM users').all();
   for (const user of users) {
@@ -245,20 +249,33 @@ const ACHIEVEMENTS = {
   STREAK_5: { name: '🔥 استریک ۵', desc: '۵ بار پشت سر هم ببر', coin: 100 },
   STREAK_10: { name: '⚡ استریک ۱۰', desc: '۱۰ بار پشت سر هم ببر', coin: 250 }
 };
-
 function checkAchievement(userId, type, gameData) {
   const user = getUser(userId);
   if (user.achievements.includes(type)) return false;
   
   let earned = false;
   switch(type) {
-    case 'FIRST_WIN': earned = user.wins === 1; break;
-    case 'EXPERT': earned = gameData.difficulty === 'expert'; break;
-    case 'SPEEDRUN': earned = gameData.time < 30; break;
-    case 'PERFECT': earned = gameData.moves === gameData.safeCells; break;
-    case 'LUCKY': earned = gameData.moves === 1; break;
-    case 'STREAK_5': earned = gameData.streak >= 5; break;
-    case 'STREAK_10': earned = gameData.streak >= 10; break;
+    case 'FIRST_WIN': 
+      earned = user.wins === 1; 
+      break;
+    case 'EXPERT': 
+      earned = gameData.difficulty === 'expert'; 
+      break;
+    case 'SPEEDRUN': 
+      earned = gameData.time < 30; 
+      break;
+    case 'PERFECT': 
+      earned = gameData.moves === gameData.safeCells; 
+      break;
+    case 'LUCKY': 
+      earned = gameData.moves === 1; 
+      break;
+    case 'STREAK_5': 
+      earned = gameData.streak >= 5; 
+      break;
+    case 'STREAK_10': 
+      earned = gameData.streak >= 10; 
+      break;
   }
   
   if (earned) {
@@ -269,7 +286,6 @@ function checkAchievement(userId, type, gameData) {
   }
   return false;
 }
-
 // ================== SHOP ==================
 const SHOP = {
   bomb_disabler: { name: '💣 مین‌شکن', desc: 'یه مین رو نابود کن', price: 50 },
