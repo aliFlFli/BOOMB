@@ -169,7 +169,7 @@ function getMainMenu() {
           { text: '🏆 لیدربورد', callback_data: 'leaderboard_menu', style: 'primary' }
         ],
         [
-          { text: '⚙️ تنظیمات', callback_data: 'settings_menu', style: 'primary' },
+          { text: '🎨 تم ها', callback_data: 'settings_menu', style: 'primary' },
           { text: '📊 آمار من', callback_data: 'my_stats', style: 'primary' }
         ],
         [{ text: '❓ راهنما', callback_data: 'help', style: 'danger' }]
@@ -448,7 +448,7 @@ function renderGame(game, gameOver = false) {
   const controlRow = [];
   if (!gameOver && game.alive) {
     controlRow.push(Markup.button.callback('🔍 Auto', 'auto_reveal'));
-    controlRow.push(Markup.button.callback('🚩 Flag', 'toggle_flag'));
+    controlRow.push(Markup.button.callback('🚩', 'toggle_flag'));
     controlRow.push(Markup.button.callback('🧰 آیتم‌ها', 'use_items_menu'));
   }
   controlRow.push(Markup.button.callback('🔄 New', 'new_game'));
@@ -799,7 +799,7 @@ bot.action('settings_menu', async (ctx) => {
   const purchasedThemes = db.prepare('SELECT theme_key FROM user_themes WHERE user_id = ?').all(user.userId);
   const purchasedKeys = purchasedThemes.map(t => t.theme_key);
   
-  let msg = `⚙️ تنظیمات\n\n💰 سکه: ${user.coins}\n🎨 تم فعلی: ${THEMES[user.theme].name}\n\n📦 تم‌های موجود:\n\n`;
+  let msg = `🎨 تم ها\n\n💰 سکه: ${user.coins}\n🎨 تم فعلی: ${THEMES[user.theme].name}\n\n📦 تم‌های موجود:\n\n`;
   
   const keyboardButtons = [];
   
