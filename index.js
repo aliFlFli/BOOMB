@@ -1,6 +1,7 @@
 const { Telegraf, Markup } = require('telegraf');
 const express = require('express');
 const Database = require('better-sqlite3');
+const crypto = require('crypto');
 require('dotenv').config();
 
 // ================== CONFIG ==================
@@ -55,12 +56,13 @@ const THEMES = {
 
 // ================== KEEP ALIVE ==================
 const app = express();
-app.get('/', (req, res) => res.send('🎮 Minesweeper PRO v6.1 is alive'));
+app.get('/', (req, res) => res.send('🎮 Minesweeper PRO v6.2 is alive'));
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log('🌐 Server on', PORT));
 
 // ================== DATABASE ==================
 const db = new Database('minesweeper.db');
+db.pragma('journal_mode = WAL'); // بهینه‌سازی عملکرد
 
 db.exec(`
   CREATE TABLE IF NOT EXISTS users (
@@ -213,19 +215,31 @@ function updateUser(user) {
 // ================== BOT INIT ==================
 const bot = new Telegraf(process.env.BOT_TOKEN);
 const games = new Map();
-let flagMode = new Map();
+const flagMode = new Map();
+
+// تولید Game ID یکتا
+function generateGameId(chatId, userId) {
+  return `${chatId}_${userId}_${Date.now()}_${crypto.randomBytes(4).toString('hex')}`;
+}
 
 // ================== GAME CLEANUP ==================
 function cleanupOldGames() {
   const now = Date.now();
   let deleted = 0;
-  for (let [chatId, game] of games.entries()) {
+  for (let [key, game] of games.entries()) {
     if (now - game.startTime > GAME_TIMEOUT) {
-      games.delete(chatId);
+      games.delete(key);
       deleted++;
     }
   }
   if (deleted > 0) console.log(`🧹 Cleaned up ${deleted} old games`);
+  
+  // پاکسازی flagMode همزمان با گیم‌ها
+  for (let [key, value] of flagMode.entries()) {
+    if (!games.has(key)) {
+      flagMode.delete(key);
+    }
+  }
 }
 
 setInterval(cleanupOldGames, 600000);
@@ -419,12 +433,14 @@ const SHOP = {
 
 // ================== BASE GAME CLASS ==================
 class MinesweeperGame {
-  constructor(size, minesCount, difficulty, userId) {
+  constructor(size, minesCount, difficulty, userId, gameId, chatId) {
+    this.gameId = gameId;
+    this.chatId = chatId;
+    this.userId = userId;
     this.size = size;
     this.totalCells = size * size;
     this.minesCount = minesCount;
     this.difficulty = difficulty;
-    this.userId = userId;
     this.board = Array(this.totalCells).fill(0);
     this.revealed = Array(this.totalCells).fill(false);
     this.flags = Array(this.totalCells).fill(false);
@@ -439,20 +455,50 @@ class MinesweeperGame {
     this.shieldActive = false;
     this.isBlitz = false;
     this.processing = false;
+    this.minesPlaced = false;
+    this.firstMoveMade = false;
     
-    this.placeMines();
-    this.calculateNumbers();
+    // مین‌ها رو فعلاً نذار
+    this.placeholders = Array(this.totalCells).fill(0);
   }
   
-  placeMines() {
-    const indices = Array.from({length: this.totalCells}, (_, i) => i);
-    for (let i = indices.length - 1; i > 0; i--) {
+  placeMinesAfterFirstClick(clickIdx) {
+    // محاسبه اندیس‌های امن (خود سلول و همسایه‌ها)
+    const safeIndices = new Set();
+    safeIndices.add(clickIdx);
+    const x = Math.floor(clickIdx / this.size);
+    const y = clickIdx % this.size;
+    for (let dx = -1; dx <= 1; dx++) {
+      for (let dy = -1; dy <= 1; dy++) {
+        const nx = x + dx;
+        const ny = y + dy;
+        if (nx >= 0 && nx < this.size && ny >= 0 && ny < this.size) {
+          safeIndices.add(nx * this.size + ny);
+        }
+      }
+    }
+    
+    // ساخت لیست اندیس‌های ممکن برای مین
+    const possibleMines = [];
+    for (let i = 0; i < this.totalCells; i++) {
+      if (!safeIndices.has(i)) {
+        possibleMines.push(i);
+      }
+    }
+    
+    // تصادفی کردن
+    for (let i = possibleMines.length - 1; i > 0; i--) {
       const j = Math.floor(Math.random() * (i + 1));
-      [indices[i], indices[j]] = [indices[j], indices[i]];
+      [possibleMines[i], possibleMines[j]] = [possibleMines[j], possibleMines[i]];
     }
-    for (let i = 0; i < this.minesCount; i++) {
-      this.board[indices[i]] = '💣';
+    
+    // قرار دادن مین‌ها
+    for (let i = 0; i < this.minesCount && i < possibleMines.length; i++) {
+      this.board[possibleMines[i]] = '💣';
     }
+    
+    this.calculateNumbers();
+    this.minesPlaced = true;
   }
   
   calculateNumbers() {
@@ -558,8 +604,8 @@ class MinesweeperGame {
 
 // ================== BLITZ GAME CLASS ==================
 class BlitzGame extends MinesweeperGame {
-  constructor(size, minesCount, difficulty, userId, timeLimit, timeBonus, blitzLevel) {
-    super(size, minesCount, difficulty, userId);
+  constructor(size, minesCount, difficulty, userId, gameId, chatId, timeLimit, timeBonus, blitzLevel) {
+    super(size, minesCount, difficulty, userId, gameId, chatId);
     this.timeLimit = timeLimit;
     this.timeBonus = timeBonus;
     this.blitzLevel = blitzLevel;
@@ -609,7 +655,8 @@ function renderGame(game, gameOver = false) {
         display = theme.flag;
       }
       
-      row.push(Markup.button.callback(display, `cell_${idx}`));
+      // استفاده از gameId برای امنیت
+      row.push(Markup.button.callback(display, `cell_${game.gameId}_${idx}`));
     }
     rows.push(row);
   }
@@ -620,9 +667,9 @@ function renderGame(game, gameOver = false) {
       game.alive = false;
     }
     if (game.alive) {
-      controlRow.push(Markup.button.callback('🔍 Auto', 'auto_reveal'));
-      controlRow.push(Markup.button.callback('🚩', 'toggle_flag'));
-      controlRow.push(Markup.button.callback('🧰 آیتم‌ها', 'use_items_menu'));
+      controlRow.push(Markup.button.callback('🔍 Auto', `auto_${game.gameId}`));
+      controlRow.push(Markup.button.callback('🚩', `flag_${game.gameId}`));
+      controlRow.push(Markup.button.callback('🧰 آیتم‌ها', `items_${game.gameId}`));
     }
   }
   controlRow.push(Markup.button.callback('🔄 New', 'new_game'));
@@ -678,9 +725,10 @@ async function showSettings(ctx, userId) {
   await ctx.editMessageText(msg, { reply_markup: { inline_keyboard: keyboardButtons } });
 }
 
-// ================== HANDLE CELL CLICK (با قفل و چک امنیتی) ==================
+// ================== HANDLE CELL CLICK ==================
 async function handleCellClick(ctx, game, idx) {
   const userId = ctx.from.id;
+  const chatId = ctx.chat.id;
   
   // امنیت: چک کن کاربر صاحب بازی هست؟
   if (game.userId !== userId) {
@@ -711,6 +759,23 @@ async function handleCellClick(ctx, game, idx) {
     }
     
     let user = getUser(userId);
+    
+    // اولین حرکت: مین‌ها رو قرار بده
+    if (!game.minesPlaced) {
+      game.placeMinesAfterFirstClick(idx);
+      // اگر سلول مورد نظر مین شده بود (احتمال صفر ولی چک میکنیم)
+      if (game.board[idx] === '💣') {
+        // این اتفاق نباید بیفته ولی اگه افتاد دوباره امتحان کن
+        for (let i = 0; i < game.totalCells; i++) {
+          if (game.board[i] !== '💣') {
+            game.board[idx] = game.board[i];
+            game.board[i] = '💣';
+            game.calculateNumbers();
+            break;
+          }
+        }
+      }
+    }
     
     if (game.board[idx] === '💣' && user.inventory?.bomb_disabler > 0) {
       user.inventory.bomb_disabler--;
@@ -837,14 +902,16 @@ async function handleCellClick(ctx, game, idx) {
     return true;
     
   } finally {
-    game.processing = false;
+    // آزادسازی قفل بعد از 100 میلی‌ثانیه
+    setTimeout(() => {
+      game.processing = false;
+    }, 100);
   }
 }
 
 async function handleFlag(ctx, game, idx) {
   const userId = ctx.from.id;
   
-  // امنیت
   if (game.userId !== userId) {
     await ctx.answerCbQuery('❌ این بازی مال تو نیست!');
     return false;
@@ -865,59 +932,6 @@ async function handleFlag(ctx, game, idx) {
   return true;
 }
 
-// ================== ITEMS ACTIONS ==================
-bot.action('use_items_menu', async (ctx) => {
-  const user = getUser(ctx.from.id);
-  const game = games.get(ctx.chat.id);
-  
-  if (!game || !game.alive) {
-    await ctx.answerCbQuery('❌ بازی فعال نیست');
-    return;
-  }
-  
-  // امنیت
-  if (game.userId !== ctx.from.id) {
-    await ctx.answerCbQuery('❌ این بازی مال تو نیست!');
-    return;
-  }
-  
-  let msg = '🧰 **آیتم‌های موجود:**\n\n';
-  const keyboardButtons = [];
-  
-  if (user.inventory?.mine_detector > 0) {
-    msg += `🔦 مین‌یاب (${user.inventory.mine_detector} عدد)\n   یک مین رو نشون میده\n\n`;
-    keyboardButtons.push([{ text: `🔦 استفاده از مین‌یاب`, callback_data: 'use_mine_detector', style: 'primary' }]);
-  }
-  
-  if (user.inventory?.smart_hint > 0) {
-    msg += `🧠 حسگر هوشمند (${user.inventory.smart_hint} عدد)\n   بهترین خونه امن رو پیشنهاد میده\n\n`;
-    keyboardButtons.push([{ text: `🧠 استفاده از حسگر`, callback_data: 'use_smart_hint', style: 'primary' }]);
-  }
-  
-  if (user.inventory?.time_freeze > 0 && !game.isBlitz) {
-    msg += `⏰ فریز زمان (${user.inventory.time_freeze} عدد)\n   +۳۰ ثانیه به زمان\n\n`;
-    keyboardButtons.push([{ text: `⏰ فریز زمان`, callback_data: 'use_time_freeze', style: 'primary' }]);
-  }
-  
-  if (user.inventory?.double_reward > 0 && !game.doubleRewardActive) {
-    msg += `🔥 جایزه دوبرابر (${user.inventory.double_reward} عدد)\n   برد بعدی ×۲ سکه\n\n`;
-    keyboardButtons.push([{ text: `🔥 فعال‌سازی جایزه ×۲`, callback_data: 'use_double_reward', style: 'danger' }]);
-  }
-  
-  if (user.inventory?.shield > 0 && !game.shieldActive) {
-    msg += `🛡️ سپر محافظ (${user.inventory.shield} عدد)\n   یک بار مرگ رو نجات میده\n\n`;
-    keyboardButtons.push([{ text: `🛡️ فعال‌سازی سپر`, callback_data: 'use_shield', style: 'primary' }]);
-  }
-  
-  if (keyboardButtons.length === 0) {
-    msg = '❌ هیچ آیتمی برای استفاده نداری!\nاز فروشگاه بخر.';
-  }
-  
-  keyboardButtons.push([{ text: '🔙 برگشت به بازی', callback_data: 'back_to_game', style: 'primary' }]);
-  
-  await ctx.editMessageText(msg, { reply_markup: { inline_keyboard: keyboardButtons } });
-});
-
 // ================== BOT ACTIONS ==================
 bot.start(async (ctx) => {
   const userId = ctx.from.id;
@@ -928,7 +942,7 @@ bot.start(async (ctx) => {
   }
   
   await ctx.reply(
-    `🎯 به Minesweeper PRO v6.1 خوش اومدی!\n\n👤 ${user.name}\n💰 سکه: ${user.coins}\n🏆 برد: ${user.wins} | باخت: ${user.losses}\n🔥 استریک: ${user.currentStreak || 0}\n⭐ سطح ${user.level} | ${LEVELS[user.level-1]?.name || 'قهرمان'}\n🎨 تم: ${THEMES[user.theme].name}\n⚡ برد بلیتز: ${user.blitzWins || 0}\n\n⚡ از دکمه‌های زیر استفاده کن:`,
+    `🎯 به Minesweeper PRO v6.2 خوش اومدی!\n\n👤 ${user.name}\n💰 سکه: ${user.coins}\n🏆 برد: ${user.wins} | باخت: ${user.losses}\n🔥 استریک: ${user.currentStreak || 0}\n⭐ سطح ${user.level} | ${LEVELS[user.level-1]?.name || 'قهرمان'}\n🎨 تم: ${THEMES[user.theme].name}\n⚡ برد بلیتز: ${user.blitzWins || 0}\n\n⚡ از دکمه‌های زیر استفاده کن:`,
     getMainMenu()
   );
 });
@@ -959,15 +973,16 @@ bot.action('blitz_mode', (ctx) => {
 
 Object.keys(BLITZ_CONFIG).forEach(level => {
   bot.action(`blitz_${level}`, async (ctx) => {
-    // محدودیت حافظه
     if (games.size >= MAX_ACTIVE_GAMES) {
       await ctx.answerCbQuery('❌ شلوغه! کمی صبر کن');
       return;
     }
     
+    const gameId = generateGameId(ctx.chat.id, ctx.from.id);
     const config = BLITZ_CONFIG[level];
-    const game = new BlitzGame(config.size, config.mines, level, ctx.from.id, config.timeLimit, config.timeBonus, level);
-    games.set(ctx.chat.id, game);
+    const game = new BlitzGame(config.size, config.mines, level, ctx.from.id, gameId, ctx.chat.id, config.timeLimit, config.timeBonus, level);
+    const gameKey = `${ctx.chat.id}_${ctx.from.id}`;
+    games.set(gameKey, game);
     await ctx.editMessageText(
       `⚡ **${config.name}**\n💰 جایزه: ${config.coin} سکه\n⏰ زمان: ${Math.floor(config.timeLimit/60)} دقیقه\n➕ پاداش هر حرکت: +${config.timeBonus} ثانیه\n${game.getStats()}`,
       renderGame(game, false)
@@ -988,51 +1003,81 @@ bot.action('new_game', (ctx) => {
       ]
     }
   };
-  const chatId = ctx.chat.id;
-  games.delete(chatId);
-  flagMode.delete(chatId);
   ctx.editMessageText('🎲 سطح سختی رو انتخاب کن:', keyboard);
   ctx.answerCbQuery();
 });
 
 Object.keys(DIFFICULTY).forEach(level => {
   bot.action(`difficulty_${level}`, async (ctx) => {
-    // محدودیت حافظه
     if (games.size >= MAX_ACTIVE_GAMES) {
       await ctx.answerCbQuery('❌ شلوغه! کمی صبر کن');
       return;
     }
     
+    const gameId = generateGameId(ctx.chat.id, ctx.from.id);
     const config = DIFFICULTY[level];
-    const game = new MinesweeperGame(config.size, config.mines, level, ctx.from.id);
-    games.set(ctx.chat.id, game);
+    const game = new MinesweeperGame(config.size, config.mines, level, ctx.from.id, gameId, ctx.chat.id);
+    const gameKey = `${ctx.chat.id}_${ctx.from.id}`;
+    games.set(gameKey, game);
     await ctx.editMessageText(`🎮 بازی ${config.name}\n💰 جایزه: ${config.coin} سکه\n${game.getStats()}`, renderGame(game, false));
     ctx.answerCbQuery('🎮 بازی شروع شد!');
   });
 });
 
-bot.action(/cell_(\d+)/, async (ctx) => {
-  const game = games.get(ctx.chat.id);
-  if (!game) { await ctx.answerCbQuery('❌ بازی فعال نیست'); return; }
-  if (!game.alive) { await ctx.answerCbQuery('❌ بازی تموم شده! New Game بزن'); return; }
-  const isFlag = flagMode.get(ctx.chat.id) || false;
-  if (isFlag) await handleFlag(ctx, game, parseInt(ctx.match[1]));
-  else await handleCellClick(ctx, game, parseInt(ctx.match[1]));
+// هندلر سلول با gameId
+bot.action(/cell_(.+)_(\d+)/, async (ctx) => {
+  const gameId = ctx.match[1];
+  const idx = parseInt(ctx.match[2]);
+  const gameKey = `${ctx.chat.id}_${ctx.from.id}`;
+  const game = games.get(gameKey);
+  
+  if (!game || game.gameId !== gameId) {
+    await ctx.answerCbQuery('❌ بازی معتبر نیست!');
+    return;
+  }
+  if (!game.alive) {
+    await ctx.answerCbQuery('❌ بازی تموم شده! New Game بزن');
+    return;
+  }
+  
+  const isFlag = flagMode.get(gameKey) || false;
+  if (isFlag) await handleFlag(ctx, game, idx);
+  else await handleCellClick(ctx, game, idx);
 });
 
-bot.action('toggle_flag', (ctx) => {
-  const game = games.get(ctx.chat.id);
-  if (!game || !game.alive) { ctx.answerCbQuery('❌ بازی فعال نیست'); return; }
-  const current = flagMode.get(ctx.chat.id) || false;
-  flagMode.set(ctx.chat.id, !current);
+// هندلرهای مخصوص هر game
+bot.action(/flag_(.+)/, (ctx) => {
+  const gameId = ctx.match[1];
+  const gameKey = `${ctx.chat.id}_${ctx.from.id}`;
+  const game = games.get(gameKey);
+  
+  if (!game || game.gameId !== gameId) {
+    ctx.answerCbQuery('❌ بازی معتبر نیست!');
+    return;
+  }
+  if (!game.alive) {
+    ctx.answerCbQuery('❌ بازی تموم شده! New Game بزن');
+    return;
+  }
+  
+  const current = flagMode.get(gameKey) || false;
+  flagMode.set(gameKey, !current);
   ctx.answerCbQuery(`${!current ? '🚩' : '🔍'} حالت ${!current ? 'پرچم' : 'کلیک'} فعال شد`);
 });
 
-bot.action('auto_reveal', async (ctx) => {
-  const game = games.get(ctx.chat.id);
-  if (!game || !game.alive) { await ctx.answerCbQuery('❌ بازی فعال نیست'); return; }
+bot.action(/auto_(.+)/, async (ctx) => {
+  const gameId = ctx.match[1];
+  const gameKey = `${ctx.chat.id}_${ctx.from.id}`;
+  const game = games.get(gameKey);
   
-  // امنیت
+  if (!game || game.gameId !== gameId) {
+    await ctx.answerCbQuery('❌ بازی معتبر نیست!');
+    return;
+  }
+  if (!game.alive) {
+    await ctx.answerCbQuery('❌ بازی تموم شده! New Game بزن');
+    return;
+  }
   if (game.userId !== ctx.from.id) {
     await ctx.answerCbQuery('❌ این بازی مال تو نیست!');
     return;
@@ -1048,11 +1093,16 @@ bot.action('auto_reveal', async (ctx) => {
   let changed = false;
   for (let i = 0; i < game.totalCells; i++) {
     if (!game.revealed[i] && !game.flags[i] && game.board[i] !== '💣') {
+      if (!game.minesPlaced) {
+        game.placeMinesAfterFirstClick(i);
+      }
       game.revealEmpty(i);
       changed = true;
       if (game.isBlitz) game.addTime();
+      break;
     }
   }
+  
   if (changed) {
     if (game.checkWin()) {
       game.alive = false;
@@ -1100,6 +1150,199 @@ bot.action('auto_reveal', async (ctx) => {
   }
 });
 
+bot.action(/items_(.+)/, async (ctx) => {
+  const gameId = ctx.match[1];
+  const gameKey = `${ctx.chat.id}_${ctx.from.id}`;
+  const game = games.get(gameKey);
+  const user = getUser(ctx.from.id);
+  
+  if (!game || game.gameId !== gameId) {
+    await ctx.answerCbQuery('❌ بازی معتبر نیست!');
+    return;
+  }
+  if (!game.alive) {
+    await ctx.answerCbQuery('❌ بازی فعال نیست');
+    return;
+  }
+  if (game.userId !== ctx.from.id) {
+    await ctx.answerCbQuery('❌ این بازی مال تو نیست!');
+    return;
+  }
+  
+  let msg = '🧰 **آیتم‌های موجود:**\n\n';
+  const keyboardButtons = [];
+  
+  if (user.inventory?.mine_detector > 0) {
+    msg += `🔦 مین‌یاب (${user.inventory.mine_detector} عدد)\n   یک مین رو نشون میده\n\n`;
+    keyboardButtons.push([{ text: `🔦 استفاده از مین‌یاب`, callback_data: `use_mine_detector_${gameId}`, style: 'primary' }]);
+  }
+  
+  if (user.inventory?.smart_hint > 0) {
+    msg += `🧠 حسگر هوشمند (${user.inventory.smart_hint} عدد)\n   بهترین خونه امن رو پیشنهاد میده\n\n`;
+    keyboardButtons.push([{ text: `🧠 استفاده از حسگر`, callback_data: `use_smart_hint_${gameId}`, style: 'primary' }]);
+  }
+  
+  if (user.inventory?.time_freeze > 0 && !game.isBlitz) {
+    msg += `⏰ فریز زمان (${user.inventory.time_freeze} عدد)\n   +۳۰ ثانیه به زمان\n\n`;
+    keyboardButtons.push([{ text: `⏰ فریز زمان`, callback_data: `use_time_freeze_${gameId}`, style: 'primary' }]);
+  }
+  
+  if (user.inventory?.double_reward > 0 && !game.doubleRewardActive) {
+    msg += `🔥 جایزه دوبرابر (${user.inventory.double_reward} عدد)\n   برد بعدی ×۲ سکه\n\n`;
+    keyboardButtons.push([{ text: `🔥 فعال‌سازی جایزه ×۲`, callback_data: `use_double_reward_${gameId}`, style: 'danger' }]);
+  }
+  
+  if (user.inventory?.shield > 0 && !game.shieldActive) {
+    msg += `🛡️ سپر محافظ (${user.inventory.shield} عدد)\n   یک بار مرگ رو نجات میده\n\n`;
+    keyboardButtons.push([{ text: `🛡️ فعال‌سازی سپر`, callback_data: `use_shield_${gameId}`, style: 'primary' }]);
+  }
+  
+  if (keyboardButtons.length === 0) {
+    msg = '❌ هیچ آیتمی برای استفاده نداری!\nاز فروشگاه بخر.';
+  }
+  
+  keyboardButtons.push([{ text: '🔙 برگشت به بازی', callback_data: `back_${gameId}`, style: 'primary' }]);
+  
+  await ctx.editMessageText(msg, { reply_markup: { inline_keyboard: keyboardButtons } });
+});
+
+// استفاده از آیتم‌ها
+async function handleItemUse(ctx, gameId, itemType, action) {
+  const gameKey = `${ctx.chat.id}_${ctx.from.id}`;
+  const game = games.get(gameKey);
+  
+  if (!game || game.gameId !== gameId) {
+    await ctx.answerCbQuery('❌ بازی معتبر نیست!');
+    return;
+  }
+  
+  await action(ctx, game);
+}
+
+bot.action(/use_mine_detector_(.+)/, async (ctx) => {
+  const gameId = ctx.match[1];
+  const gameKey = `${ctx.chat.id}_${ctx.from.id}`;
+  const game = games.get(gameKey);
+  const user = getUser(ctx.from.id);
+  
+  if (!game || game.gameId !== gameId) return ctx.answerCbQuery('❌ بازی معتبر نیست!');
+  if (!game.alive) return ctx.answerCbQuery('❌ بازی فعال نیست');
+  if (game.userId !== ctx.from.id) return ctx.answerCbQuery('❌ این بازی مال تو نیست!');
+  if (user.inventory?.mine_detector <= 0) return ctx.answerCbQuery('❌ مین‌یاب نداری!', true);
+  
+  const mineIdx = game.useMineDetector();
+  if (mineIdx === -1) {
+    await ctx.answerCbQuery('🔍 هیچ مین پنهانی پیدا نشد!', true);
+    return;
+  }
+  
+  user.inventory.mine_detector--;
+  updateUser(user);
+  
+  const x = Math.floor(mineIdx / game.size);
+  const y = mineIdx % game.size;
+  
+  await ctx.answerCbQuery(`🔦 مین در ردیف ${x+1}، ستون ${y+1} پیدا شد!`, true);
+  await ctx.editMessageText(`${game.isBlitz ? '⚡' : '💣'} ${DIFFICULTY[game.difficulty]?.name}\n🔦 مین‌یاب: یک مین پیدا شد!\n${game.getStats()}`, renderGame(game, false));
+});
+
+bot.action(/use_smart_hint_(.+)/, async (ctx) => {
+  const gameId = ctx.match[1];
+  const gameKey = `${ctx.chat.id}_${ctx.from.id}`;
+  const game = games.get(gameKey);
+  const user = getUser(ctx.from.id);
+  
+  if (!game || game.gameId !== gameId) return ctx.answerCbQuery('❌ بازی معتبر نیست!');
+  if (!game.alive) return ctx.answerCbQuery('❌ بازی فعال نیست');
+  if (game.userId !== ctx.from.id) return ctx.answerCbQuery('❌ این بازی مال تو نیست!');
+  if (user.inventory?.smart_hint <= 0) return ctx.answerCbQuery('❌ حسگر هوشمند نداری!', true);
+  
+  const hintIdx = game.useSmartHint();
+  if (hintIdx === -1) {
+    await ctx.answerCbQuery('🧠 هیچ خونه امنی پیدا نشد!', true);
+    return;
+  }
+  
+  user.inventory.smart_hint--;
+  updateUser(user);
+  
+  const x = Math.floor(hintIdx / game.size);
+  const y = hintIdx % game.size;
+  
+  await ctx.answerCbQuery(`🧠 پیشنهاد: ردیف ${x+1}، ستون ${y+1} امن به نظر میرسه!`, true);
+  await ctx.editMessageText(`${game.isBlitz ? '⚡' : '💣'} ${DIFFICULTY[game.difficulty]?.name}\n🧠 حسگر هوشمند: یه خونه امن پیدا شد!\n${game.getStats()}`, renderGame(game, false));
+});
+
+bot.action(/use_time_freeze_(.+)/, async (ctx) => {
+  const gameId = ctx.match[1];
+  const gameKey = `${ctx.chat.id}_${ctx.from.id}`;
+  const game = games.get(gameKey);
+  const user = getUser(ctx.from.id);
+  
+  if (!game || game.gameId !== gameId) return ctx.answerCbQuery('❌ بازی معتبر نیست!');
+  if (!game.alive) return ctx.answerCbQuery('❌ بازی فعال نیست');
+  if (game.userId !== ctx.from.id) return ctx.answerCbQuery('❌ این بازی مال تو نیست!');
+  if (game.isBlitz) return ctx.answerCbQuery('❌ فریز زمان در حالت بلیتز قابل استفاده نیست!', true);
+  if (user.inventory?.time_freeze <= 0) return ctx.answerCbQuery('❌ فریز زمان نداری!', true);
+  
+  user.inventory.time_freeze--;
+  updateUser(user);
+  game.freezeTime();
+  
+  await ctx.answerCbQuery('⏰ ۳۰ ثانیه به زمان اضافه شد!', true);
+  await ctx.editMessageText(`💣 ${DIFFICULTY[game.difficulty]?.name}\n⏰ فریز زمان فعال شد! +۳۰ ثانیه\n${game.getStats()}`, renderGame(game, false));
+});
+
+bot.action(/use_double_reward_(.+)/, async (ctx) => {
+  const gameId = ctx.match[1];
+  const gameKey = `${ctx.chat.id}_${ctx.from.id}`;
+  const game = games.get(gameKey);
+  const user = getUser(ctx.from.id);
+  
+  if (!game || game.gameId !== gameId) return ctx.answerCbQuery('❌ بازی معتبر نیست!');
+  if (!game.alive) return ctx.answerCbQuery('❌ بازی فعال نیست');
+  if (game.userId !== ctx.from.id) return ctx.answerCbQuery('❌ این بازی مال تو نیست!');
+  if (user.inventory?.double_reward <= 0 || game.doubleRewardActive) return ctx.answerCbQuery('❌ جایزه دوبرابر فعال نیست یا نداری!', true);
+  
+  user.inventory.double_reward--;
+  game.doubleRewardActive = true;
+  updateUser(user);
+  
+  await ctx.answerCbQuery('🔥 جایزه دوبرابر فعال شد! برد بعدی ×۲ سکه!', true);
+  await ctx.editMessageText(`${game.isBlitz ? '⚡' : '💣'} ${DIFFICULTY[game.difficulty]?.name}\n🔥 جایزه دوبرابر فعال شد!\n${game.getStats()}`, renderGame(game, false));
+});
+
+bot.action(/use_shield_(.+)/, async (ctx) => {
+  const gameId = ctx.match[1];
+  const gameKey = `${ctx.chat.id}_${ctx.from.id}`;
+  const game = games.get(gameKey);
+  const user = getUser(ctx.from.id);
+  
+  if (!game || game.gameId !== gameId) return ctx.answerCbQuery('❌ بازی معتبر نیست!');
+  if (!game.alive) return ctx.answerCbQuery('❌ بازی فعال نیست');
+  if (game.userId !== ctx.from.id) return ctx.answerCbQuery('❌ این بازی مال تو نیست!');
+  if (user.inventory?.shield <= 0 || game.shieldActive) return ctx.answerCbQuery('❌ سپر محافظ فعال نیست یا نداری!', true);
+  
+  user.inventory.shield--;
+  game.shieldActive = true;
+  updateUser(user);
+  
+  await ctx.answerCbQuery('🛡️ سپر محافظ فعال شد! یک بار مرگ رو نجات میده!', true);
+  await ctx.editMessageText(`${game.isBlitz ? '⚡' : '💣'} ${DIFFICULTY[game.difficulty]?.name}\n🛡️ سپر محافظ فعال شد!\n${game.getStats()}`, renderGame(game, false));
+});
+
+bot.action(/back_(.+)/, async (ctx) => {
+  const gameId = ctx.match[1];
+  const gameKey = `${ctx.chat.id}_${ctx.from.id}`;
+  const game = games.get(gameKey);
+  
+  if (game && game.alive && game.gameId === gameId) {
+    await ctx.editMessageText(`${game.isBlitz ? '⚡' : '💣'} ${DIFFICULTY[game.difficulty]?.name}\n${game.getStats()}`, renderGame(game, false));
+  } else {
+    await ctx.answerCbQuery('❌ بازی تموم شده');
+  }
+});
+
 // ================== SHOP و بقیه منوها ==================
 bot.action('shop_menu', async (ctx) => {
   const user = getUser(ctx.from.id);
@@ -1142,7 +1385,6 @@ bot.action('shop_menu', async (ctx) => {
   await ctx.editMessageText(msg, keyboard);
 });
 
-// خرید آیتم‌ها (کوتاه شده به دلیل طولانی شدن)
 async function handleBuy(ctx, itemKey, price, itemName, emoji) {
   const user = getUser(ctx.from.id);
   if (user.coins >= price) {
@@ -1206,7 +1448,6 @@ bot.action(/activate_theme_(.+)/, async (ctx) => {
   await showSettings(ctx, ctx.from.id);
 });
 
-// منوهای دیگه...
 bot.action('wallet', async (ctx) => {
   const user = getUser(ctx.from.id);
   await ctx.editMessageText(`💰 کیف پول شما\n\nسکه: ${user.coins} 🪙\n\n🎮 هر برد عادی: +${DIFFICULTY.easy.coin}-${DIFFICULTY.expert.coin} سکه\n⚡ هر برد بلیتز: +${BLITZ_CONFIG.easy.coin}-${BLITZ_CONFIG.expert.coin} سکه\n🏆 دستاوردها: سکه اضافه میدن\n🔥 استریک فعلی: ${user.currentStreak || 0}\n⭐ سطح: ${user.level}\n⚡ برد بلیتز: ${user.blitzWins || 0}`, {
@@ -1275,7 +1516,7 @@ bot.action('level_info', async (ctx) => {
 
 bot.action('help', async (ctx) => {
   await ctx.editMessageText(
-    `📖 **راهنمای v6.1**\n\n` +
+    `📖 **راهنمای v6.2**\n\n` +
     `🎯 **هدف:** همه سلول‌های بدون مین رو باز کن\n\n` +
     `🕹️ **حالت‌های بازی:**\n` +
     `• 🎮 حالت عادی: بازی کلاسیک بدون محدودیت زمان\n` +
@@ -1366,15 +1607,6 @@ bot.action('lb_coins', async (ctx) => showLeaderboard(ctx, 'coins', '💰 ثرو
 bot.action('lb_level', async (ctx) => showLeaderboard(ctx, 'level', '✨ بالاترین سطح'));
 bot.action('lb_blitz', async (ctx) => showLeaderboard(ctx, 'blitz', '⚡ سلطان بلیتز'));
 
-bot.action('back_to_game', async (ctx) => {
-  const game = games.get(ctx.chat.id);
-  if (game && game.alive) {
-    await ctx.editMessageText(`${game.isBlitz ? '⚡' : '💣'} ${DIFFICULTY[game.difficulty]?.name}\n${game.getStats()}`, renderGame(game, false));
-  } else {
-    await ctx.answerCbQuery('❌ بازی تموم شده');
-  }
-});
-
 // ================== CLEANUP ==================
 setInterval(cleanupOldGames, 600000);
 setInterval(checkWeeklyReset, 3600000);
@@ -1387,7 +1619,7 @@ bot.catch((err, ctx) => {
 
 // ================== LAUNCH ==================
 bot.launch()
-  .then(() => console.log('🚀 Minesweeper PRO v6.1 Running!'))
+  .then(() => console.log('🚀 Minesweeper PRO v6.2 Secure Running!'))
   .catch(console.error);
 
 process.once('SIGINT', () => bot.stop('SIGINT'));
