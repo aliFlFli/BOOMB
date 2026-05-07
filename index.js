@@ -37,6 +37,18 @@ const LEVELS = [
   { level: 10, xp_needed: 6000, name: '🏆 خدا', coin_bonus: 200 }
 ];
 
+// ================== DAILY QUESTS ==================
+const DAILY_QUESTS = {
+  play_3_games: { name: '🎮 ۳ بازی کن', desc: '۳ بازی انجام بده', target: 3, reward_coin: 50, reward_xp: 30, type: 'play_games' },
+  win_2_games: { name: '🏆 ۲ برد', desc: '۲ بازی ببر', target: 2, reward_coin: 75, reward_xp: 50, type: 'wins' },
+  expert_win: { name: '💀 برد حرفه‌ای', desc: 'یه بازی حرفه‌ای ببر', target: 1, reward_coin: 100, reward_xp: 75, type: 'expert_win' },
+  blitz_win: { name: '⚡ برد بلیتز', desc: 'یه بازی بلیتز ببر', target: 1, reward_coin: 80, reward_xp: 60, type: 'blitz_win' },
+  use_item: { name: '🧰 استفاده از آیتم', desc: 'از یک آیتم استفاده کن', target: 1, reward_coin: 40, reward_xp: 20, type: 'use_item' },
+  streak_3: { name: '🔥 استریک ۳', desc: '۳ برد متوالی داشته باش', target: 3, reward_coin: 60, reward_xp: 40, type: 'streak' },
+  mine_detector: { name: '🔦 مین‌یاب', desc: 'از مین‌یاب استفاده کن', target: 1, reward_coin: 50, reward_xp: 25, type: 'mine_detector' },
+  shield_use: { name: '🛡️ سپر محافظ', desc: 'از سپر محافظ استفاده کن', target: 1, reward_coin: 50, reward_xp: 25, type: 'shield_use' }
+};
+
 // ================== THEMES ==================
 const THEMES = {
   default: { name: 'کلاسیک', emoji: '⬜', price: 0, bg: '⬜', mine: '💣', flag: '🚩', num: ['▪️', '1️⃣', '2️⃣', '3️⃣', '4️⃣', '5️⃣', '6️⃣', '7️⃣', '8️⃣'] },
@@ -56,13 +68,13 @@ const THEMES = {
 
 // ================== KEEP ALIVE ==================
 const app = express();
-app.get('/', (req, res) => res.send('🎮 Minesweeper PRO v6.2 is alive'));
+app.get('/', (req, res) => res.send('🎮 Minesweeper PRO v6.3 is alive'));
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log('🌐 Server on', PORT));
 
 // ================== DATABASE ==================
 const db = new Database('minesweeper.db');
-db.pragma('journal_mode = WAL'); // بهینه‌سازی عملکرد
+db.pragma('journal_mode = WAL');
 
 db.exec(`
   CREATE TABLE IF NOT EXISTS users (
@@ -85,7 +97,12 @@ db.exec(`
     xp INTEGER DEFAULT 0,
     level INTEGER DEFAULT 1,
     blitz_best_time INTEGER DEFAULT 0,
-    blitz_wins INTEGER DEFAULT 0
+    blitz_wins INTEGER DEFAULT 0,
+    daily_quests TEXT DEFAULT '[]',
+    daily_quest_progress TEXT DEFAULT '{}',
+    last_daily_reset TEXT,
+    daily_streak INTEGER DEFAULT 0,
+    last_daily_claim TEXT
   )
 `);
 
@@ -138,7 +155,12 @@ function getUser(userId) {
       xp: 0,
       level: 1,
       blitzBestTime: 0,
-      blitzWins: 0
+      blitzWins: 0,
+      dailyQuests: [],
+      dailyQuestProgress: {},
+      lastDailyReset: null,
+      dailyStreak: 0,
+      lastDailyClaim: null
     };
   }
   return {
@@ -161,7 +183,12 @@ function getUser(userId) {
     xp: row.xp || 0,
     level: row.level || 1,
     blitzBestTime: row.blitz_best_time || 0,
-    blitzWins: row.blitz_wins || 0
+    blitzWins: row.blitz_wins || 0,
+    dailyQuests: safeJSONParse(row.daily_quests, []),
+    dailyQuestProgress: safeJSONParse(row.daily_quest_progress, {}),
+    lastDailyReset: row.last_daily_reset,
+    dailyStreak: row.daily_streak || 0,
+    lastDailyClaim: row.last_daily_claim
   };
 }
 
@@ -186,7 +213,12 @@ function updateUser(user) {
       xp = ?,
       level = ?,
       blitz_best_time = ?,
-      blitz_wins = ?
+      blitz_wins = ?,
+      daily_quests = ?,
+      daily_quest_progress = ?,
+      last_daily_reset = ?,
+      daily_streak = ?,
+      last_daily_claim = ?
     WHERE user_id = ?
   `).run(
     user.coins,
@@ -208,8 +240,129 @@ function updateUser(user) {
     user.level,
     user.blitzBestTime,
     user.blitzWins,
+    JSON.stringify(user.dailyQuests),
+    JSON.stringify(user.dailyQuestProgress),
+    user.lastDailyReset,
+    user.dailyStreak,
+    user.lastDailyClaim,
     user.userId
   );
+}
+
+// ================== DAILY QUESTS FUNCTIONS ==================
+function resetDailyQuests(userId) {
+  const user = getUser(userId);
+  const today = new Date().toDateString();
+  
+  if (user.lastDailyReset === today) return;
+  
+  // انتخاب ۳ کوئست تصادفی
+  const questKeys = Object.keys(DAILY_QUESTS);
+  const shuffled = [...questKeys];
+  for (let i = shuffled.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+  }
+  const selectedQuests = shuffled.slice(0, 3);
+  
+  user.dailyQuests = selectedQuests;
+  user.dailyQuestProgress = {};
+  user.lastDailyReset = today;
+  updateUser(user);
+}
+
+function getUserDailyQuests(userId) {
+  resetDailyQuests(userId);
+  const user = getUser(userId);
+  
+  return user.dailyQuests.map(key => ({
+    key,
+    ...DAILY_QUESTS[key],
+    progress: user.dailyQuestProgress[key] || 0
+  }));
+}
+
+function updateQuestProgress(userId, type, amount = 1) {
+  const user = getUser(userId);
+  const today = new Date().toDateString();
+  
+  if (user.lastDailyReset !== today) return null;
+  
+  let completedQuests = [];
+  let totalRewardCoin = 0;
+  let totalRewardXp = 0;
+  
+  for (const key of user.dailyQuests) {
+    const quest = DAILY_QUESTS[key];
+    if ((user.dailyQuestProgress[key] || 0) >= quest.target) continue;
+    
+    let match = false;
+    switch(quest.type) {
+      case 'play_games': match = type === 'game_played'; break;
+      case 'wins': match = type === 'win'; break;
+      case 'expert_win': match = type === 'expert_win'; break;
+      case 'blitz_win': match = type === 'blitz_win'; break;
+      case 'use_item': match = type === 'use_item'; break;
+      case 'streak': match = type === 'streak'; break;
+      case 'mine_detector': match = type === 'mine_detector'; break;
+      case 'shield_use': match = type === 'shield_use'; break;
+    }
+    
+    if (match) {
+      user.dailyQuestProgress[key] = (user.dailyQuestProgress[key] || 0) + amount;
+      if (user.dailyQuestProgress[key] >= quest.target) {
+        completedQuests.push(quest);
+        totalRewardCoin += quest.reward_coin;
+        totalRewardXp += quest.reward_xp;
+      }
+    }
+  }
+  
+  if (completedQuests.length > 0) {
+    user.coins += totalRewardCoin;
+    updateUser(user);
+    addXP(userId, totalRewardXp);
+    return { completedQuests, totalRewardCoin, totalRewardXp };
+  }
+  
+  updateUser(user);
+  return null;
+}
+
+function claimDailyReward(userId) {
+  const user = getUser(userId);
+  const today = new Date().toDateString();
+  
+  if (user.lastDailyClaim === today) {
+    return { claimed: false, message: '❌ امروز جایزه روزانه رو گرفتی!' };
+  }
+  
+  let reward = 50;
+  let streak = user.dailyStreak || 0;
+  
+  if (user.lastDailyClaim) {
+    const lastClaim = new Date(user.lastDailyClaim);
+    const yesterday = new Date();
+    yesterday.setDate(yesterday.getDate() - 1);
+    
+    if (lastClaim.toDateString() === yesterday.toDateString()) {
+      streak++;
+    } else {
+      streak = 1;
+    }
+  } else {
+    streak = 1;
+  }
+  
+  const streakBonus = Math.min(streak * 5, 50);
+  reward += streakBonus;
+  
+  user.coins += reward;
+  user.dailyStreak = streak;
+  user.lastDailyClaim = today;
+  updateUser(user);
+  
+  return { claimed: true, reward, streak, message: `✅ جایزه روزانه ${reward} سکه! (استریک: ${streak} روز)` };
 }
 
 // ================== BOT INIT ==================
@@ -217,12 +370,10 @@ const bot = new Telegraf(process.env.BOT_TOKEN);
 const games = new Map();
 const flagMode = new Map();
 
-// تولید Game ID یکتا
 function generateGameId(chatId, userId) {
   return `${chatId}_${userId}_${Date.now()}_${crypto.randomBytes(4).toString('hex')}`;
 }
 
-// ================== GAME CLEANUP ==================
 function cleanupOldGames() {
   const now = Date.now();
   let deleted = 0;
@@ -232,14 +383,10 @@ function cleanupOldGames() {
       deleted++;
     }
   }
-  if (deleted > 0) console.log(`🧹 Cleaned up ${deleted} old games`);
-  
-  // پاکسازی flagMode همزمان با گیم‌ها
   for (let [key, value] of flagMode.entries()) {
-    if (!games.has(key)) {
-      flagMode.delete(key);
-    }
+    if (!games.has(key)) flagMode.delete(key);
   }
+  if (deleted > 0) console.log(`🧹 Cleaned up ${deleted} old games`);
 }
 
 setInterval(cleanupOldGames, 600000);
@@ -252,6 +399,10 @@ function getMainMenu() {
         [
           { text: '🎮 حالت عادی', callback_data: 'new_game', style: 'primary' },
           { text: '⚡ بلیتز', callback_data: 'blitz_mode', style: 'danger' }
+        ],
+        [
+          { text: '📅 ماموریت‌ها', callback_data: 'daily_quests', style: 'success' },
+          { text: '🎁 جایزه روزانه', callback_data: 'daily_reward', style: 'success' }
         ],
         [
           { text: '🛒 فروشگاه', callback_data: 'shop_menu', style: 'success' },
@@ -342,6 +493,9 @@ function getLeaderboard(type, stat) {
     case 'blitz':
       sql = 'SELECT user_id, blitz_wins, name FROM users ORDER BY blitz_wins DESC LIMIT 10';
       break;
+    case 'daily_streak':
+      sql = 'SELECT user_id, daily_streak, name FROM users ORDER BY daily_streak DESC LIMIT 10';
+      break;
   }
   return db.prepare(sql).all();
 }
@@ -356,6 +510,7 @@ function updateStreak(userId, win) {
     if (newStreak > (user.bestStreak || 0)) {
       user.bestStreak = newStreak;
     }
+    updateQuestProgress(userId, 'streak', newStreak);
   } else {
     user.currentStreak = 0;
   }
@@ -392,7 +547,9 @@ const ACHIEVEMENTS = {
   LUCKY: { name: '🍀 خوش شانس', desc: 'با ۱ حرکت ببر', coin: 500 },
   STREAK_5: { name: '🔥 استریک ۵', desc: '۵ بار پشت سر هم ببر', coin: 100 },
   STREAK_10: { name: '⚡ استریک ۱۰', desc: '۱۰ بار پشت سر هم ببر', coin: 250 },
-  BLITZ_WIN: { name: '⚡ سلطان بلیتز', desc: 'یک بازی بلیتز ببر', coin: 150 }
+  BLITZ_WIN: { name: '⚡ سلطان بلیتز', desc: 'یک بازی بلیتز ببر', coin: 150 },
+  DAILY_STREAK_7: { name: '📅 هفته‌ای', desc: '۷ روز متوالی جایزه روزانه بگیری', coin: 200 },
+  ALL_QUESTS: { name: '🎯 ماموریت‌کامل', desc: 'یک روز همه ماموریت‌ها رو انجام بده', coin: 150 }
 };
 
 function checkAchievement(userId, type, gameData = {}) {
@@ -409,6 +566,8 @@ function checkAchievement(userId, type, gameData = {}) {
     case 'STREAK_5': earned = (user.bestStreak || 0) >= 5; break;
     case 'STREAK_10': earned = (user.bestStreak || 0) >= 10; break;
     case 'BLITZ_WIN': earned = (user.blitzWins || 0) >= 1; break;
+    case 'DAILY_STREAK_7': earned = (user.dailyStreak || 0) >= 7; break;
+    case 'ALL_QUESTS': earned = gameData.allQuests || false; break;
   }
   
   if (earned) {
@@ -456,14 +615,9 @@ class MinesweeperGame {
     this.isBlitz = false;
     this.processing = false;
     this.minesPlaced = false;
-    this.firstMoveMade = false;
-    
-    // مین‌ها رو فعلاً نذار
-    this.placeholders = Array(this.totalCells).fill(0);
   }
   
   placeMinesAfterFirstClick(clickIdx) {
-    // محاسبه اندیس‌های امن (خود سلول و همسایه‌ها)
     const safeIndices = new Set();
     safeIndices.add(clickIdx);
     const x = Math.floor(clickIdx / this.size);
@@ -478,21 +632,16 @@ class MinesweeperGame {
       }
     }
     
-    // ساخت لیست اندیس‌های ممکن برای مین
     const possibleMines = [];
     for (let i = 0; i < this.totalCells; i++) {
-      if (!safeIndices.has(i)) {
-        possibleMines.push(i);
-      }
+      if (!safeIndices.has(i)) possibleMines.push(i);
     }
     
-    // تصادفی کردن
     for (let i = possibleMines.length - 1; i > 0; i--) {
       const j = Math.floor(Math.random() * (i + 1));
       [possibleMines[i], possibleMines[j]] = [possibleMines[j], possibleMines[i]];
     }
     
-    // قرار دادن مین‌ها
     for (let i = 0; i < this.minesCount && i < possibleMines.length; i++) {
       this.board[possibleMines[i]] = '💣';
     }
@@ -648,14 +797,11 @@ function renderGame(game, gameOver = false) {
       if (game.revealed[idx]) {
         if (game.board[idx] === '💣') display = theme.mine;
         else if (game.board[idx] === 0) display = '▪️';
-        else {
-          display = theme.num[game.board[idx]] || '❓';
-        }
+        else display = theme.num[game.board[idx]] || '❓';
       } else if (game.flags[idx]) {
         display = theme.flag;
       }
       
-      // استفاده از gameId برای امنیت
       row.push(Markup.button.callback(display, `cell_${game.gameId}_${idx}`));
     }
     rows.push(row);
@@ -663,9 +809,7 @@ function renderGame(game, gameOver = false) {
   
   const controlRow = [];
   if (!gameOver && game.alive) {
-    if (game.isBlitz && game.getTimeLeft() <= 0) {
-      game.alive = false;
-    }
+    if (game.isBlitz && game.getTimeLeft() <= 0) game.alive = false;
     if (game.alive) {
       controlRow.push(Markup.button.callback('🔍 Auto', `auto_${game.gameId}`));
       controlRow.push(Markup.button.callback('🚩', `flag_${game.gameId}`));
@@ -682,7 +826,7 @@ function renderGame(game, gameOver = false) {
 // ================== UTILITY FUNCTIONS ==================
 async function showMainMenu(ctx, userId) {
   const user = getUser(userId);
-  const text = `🎯 منوی اصلی\n\n👤 ${user.name}\n💰 سکه: ${user.coins}\n🏆 برد: ${user.wins} | باخت: ${user.losses}\n🔥 استریک: ${user.currentStreak || 0}\n⭐ سطح ${user.level} | ${LEVELS[user.level-1]?.name || 'قهرمان'}\n🎨 تم: ${THEMES[user.theme].name}\n⚡ برد بلیتز: ${user.blitzWins || 0}`;
+  const text = `🎯 منوی اصلی\n\n👤 ${user.name}\n💰 سکه: ${user.coins}\n🏆 برد: ${user.wins} | باخت: ${user.losses}\n🔥 استریک: ${user.currentStreak || 0}\n⭐ سطح ${user.level} | ${LEVELS[user.level-1]?.name || 'قهرمان'}\n🎨 تم: ${THEMES[user.theme].name}\n⚡ برد بلیتز: ${user.blitzWins || 0}\n📅 استریک روزانه: ${user.dailyStreak || 0} روز`;
   
   if (ctx.callbackQuery) {
     await ctx.editMessageText(text, getMainMenu());
@@ -725,18 +869,45 @@ async function showSettings(ctx, userId) {
   await ctx.editMessageText(msg, { reply_markup: { inline_keyboard: keyboardButtons } });
 }
 
+// ================== DAILY QUESTS MENU ==================
+async function showDailyQuests(ctx, userId) {
+  const quests = getUserDailyQuests(userId);
+  const user = getUser(userId);
+  let msg = '📅 **ماموریت‌های روزانه**\n\n';
+  
+  let allCompleted = true;
+  for (const quest of quests) {
+    const completed = quest.progress >= quest.target;
+    if (!completed) allCompleted = false;
+    msg += `${completed ? '✅' : '⏳'} **${quest.name}**\n`;
+    msg += `   📝 ${quest.desc}\n`;
+    msg += `   📊 پیشرفت: ${quest.progress}/${quest.target}\n`;
+    msg += `   🎁 جایزه: ${quest.reward_coin} سکه + ${quest.reward_xp} XP\n\n`;
+  }
+  
+  if (allCompleted && quests.length > 0) {
+    msg += `🎉 **همه ماموریت‌ها رو انجام دادی!** 🎉\n`;
+    checkAchievement(userId, 'ALL_QUESTS', { allQuests: true });
+  }
+  
+  msg += `📅 **استریک روزانه: ${user.dailyStreak || 0} روز**\n`;
+  msg += `💡 هر روز جایزه روزانه بگیری استریکت بیشتر میشه!`;
+  
+  await ctx.editMessageText(msg, {
+    reply_markup: { inline_keyboard: [[{ text: '🔙 برگشت', callback_data: 'main_menu', style: 'primary' }]] }
+  });
+}
+
 // ================== HANDLE CELL CLICK ==================
 async function handleCellClick(ctx, game, idx) {
   const userId = ctx.from.id;
   const chatId = ctx.chat.id;
   
-  // امنیت: چک کن کاربر صاحب بازی هست؟
   if (game.userId !== userId) {
     await ctx.answerCbQuery('❌ این بازی مال تو نیست!');
     return false;
   }
   
-  // قفل برای جلوگیری از Race Condition
   if (game.processing) {
     await ctx.answerCbQuery('⏳ در حال پردازش... صبر کن');
     return false;
@@ -760,12 +931,9 @@ async function handleCellClick(ctx, game, idx) {
     
     let user = getUser(userId);
     
-    // اولین حرکت: مین‌ها رو قرار بده
     if (!game.minesPlaced) {
       game.placeMinesAfterFirstClick(idx);
-      // اگر سلول مورد نظر مین شده بود (احتمال صفر ولی چک میکنیم)
       if (game.board[idx] === '💣') {
-        // این اتفاق نباید بیفته ولی اگه افتاد دوباره امتحان کن
         for (let i = 0; i < game.totalCells; i++) {
           if (game.board[i] !== '💣') {
             game.board[idx] = game.board[i];
@@ -789,16 +957,15 @@ async function handleCellClick(ctx, game, idx) {
     game.actualClicks++;
     game.moves++;
     
-    if (game.isBlitz && game.board[idx] !== '💣') {
-      game.addTime();
-    }
+    if (game.isBlitz && game.board[idx] !== '💣') game.addTime();
     
     if (game.board[idx] === '💣') {
       if (user.inventory?.shield > 0 && !game.shieldActive) {
         game.shieldActive = true;
         user.inventory.shield--;
         updateUser(user);
-        await ctx.answerCbQuery('🛡️ سپر محافظ فعال شد! این مین رو دفع کردی!', true);
+        updateQuestProgress(userId, 'shield_use');
+        await ctx.answerCbQuery('🛡️ سپر محافظ فعال شد!', true);
         await ctx.editMessageText(`💣 ${DIFFICULTY[game.difficulty]?.name}\n🛡️ سپر محافظ یک مین رو دفع کرد!\n${game.getStats()}`, renderGame(game, false));
         return true;
       }
@@ -816,6 +983,7 @@ async function handleCellClick(ctx, game, idx) {
       game.revealAllMines();
       user.losses++;
       user.gamesPlayed++;
+      updateQuestProgress(userId, 'game_played');
       updateStreak(userId, false);
       updateUser(user);
       await ctx.editMessageText(`💥 باختی! 💀\n\n${game.getStats()}\n🔥 استریک فعلی: 0`, renderGame(game, true));
@@ -832,7 +1000,12 @@ async function handleCellClick(ctx, game, idx) {
       
       if (game.isBlitz) {
         coinReward = BLITZ_CONFIG[game.blitzLevel]?.coin || coinReward * 2;
+        updateQuestProgress(userId, 'blitz_win');
       }
+      
+      if (game.difficulty === 'expert') updateQuestProgress(userId, 'expert_win');
+      updateQuestProgress(userId, 'win');
+      updateQuestProgress(userId, 'game_played');
       
       if (user.inventory?.double_reward > 0 && !game.doubleRewardActive) {
         game.doubleRewardActive = true;
@@ -902,10 +1075,7 @@ async function handleCellClick(ctx, game, idx) {
     return true;
     
   } finally {
-    // آزادسازی قفل بعد از 100 میلی‌ثانیه
-    setTimeout(() => {
-      game.processing = false;
-    }, 100);
+    setTimeout(() => { game.processing = false; }, 100);
   }
 }
 
@@ -942,7 +1112,7 @@ bot.start(async (ctx) => {
   }
   
   await ctx.reply(
-    `🎯 به Minesweeper PRO v6.2 خوش اومدی!\n\n👤 ${user.name}\n💰 سکه: ${user.coins}\n🏆 برد: ${user.wins} | باخت: ${user.losses}\n🔥 استریک: ${user.currentStreak || 0}\n⭐ سطح ${user.level} | ${LEVELS[user.level-1]?.name || 'قهرمان'}\n🎨 تم: ${THEMES[user.theme].name}\n⚡ برد بلیتز: ${user.blitzWins || 0}\n\n⚡ از دکمه‌های زیر استفاده کن:`,
+    `🎯 به Minesweeper PRO v6.3 خوش اومدی!\n\n👤 ${user.name}\n💰 سکه: ${user.coins}\n🏆 برد: ${user.wins} | باخت: ${user.losses}\n🔥 استریک: ${user.currentStreak || 0}\n⭐ سطح ${user.level} | ${LEVELS[user.level-1]?.name || 'قهرمان'}\n🎨 تم: ${THEMES[user.theme].name}\n⚡ برد بلیتز: ${user.blitzWins || 0}\n📅 استریک روزانه: ${user.dailyStreak || 0} روز\n\n⚡ از دکمه‌های زیر استفاده کن:`,
     getMainMenu()
   );
 });
@@ -953,6 +1123,24 @@ bot.action('main_menu', async (ctx) => {
 
 bot.action('settings_menu', async (ctx) => {
   await showSettings(ctx, ctx.from.id);
+});
+
+bot.action('daily_quests', async (ctx) => {
+  await showDailyQuests(ctx, ctx.from.id);
+});
+
+bot.action('daily_reward', async (ctx) => {
+  const result = claimDailyReward(ctx.from.id);
+  const user = getUser(ctx.from.id);
+  let msg = result.message;
+  if (result.claimed) {
+    const streakAch = checkAchievement(ctx.from.id, 'DAILY_STREAK_7', {});
+    if (streakAch) msg += `\n\n🏆 ${streakAch.name} +${streakAch.coin} سکه!`;
+    msg += `\n\n💰 سکه کل: ${user.coins}`;
+  }
+  await ctx.editMessageText(msg, {
+    reply_markup: { inline_keyboard: [[{ text: '🔙 برگشت', callback_data: 'main_menu', style: 'primary' }]] }
+  });
 });
 
 bot.action('blitz_mode', (ctx) => {
@@ -1024,7 +1212,6 @@ Object.keys(DIFFICULTY).forEach(level => {
   });
 });
 
-// هندلر سلول با gameId
 bot.action(/cell_(.+)_(\d+)/, async (ctx) => {
   const gameId = ctx.match[1];
   const idx = parseInt(ctx.match[2]);
@@ -1045,7 +1232,6 @@ bot.action(/cell_(.+)_(\d+)/, async (ctx) => {
   else await handleCellClick(ctx, game, idx);
 });
 
-// هندلرهای مخصوص هر game
 bot.action(/flag_(.+)/, (ctx) => {
   const gameId = ctx.match[1];
   const gameKey = `${ctx.chat.id}_${ctx.from.id}`;
@@ -1093,9 +1279,7 @@ bot.action(/auto_(.+)/, async (ctx) => {
   let changed = false;
   for (let i = 0; i < game.totalCells; i++) {
     if (!game.revealed[i] && !game.flags[i] && game.board[i] !== '💣') {
-      if (!game.minesPlaced) {
-        game.placeMinesAfterFirstClick(i);
-      }
+      if (!game.minesPlaced) game.placeMinesAfterFirstClick(i);
       game.revealEmpty(i);
       changed = true;
       if (game.isBlitz) game.addTime();
@@ -1111,7 +1295,12 @@ bot.action(/auto_(.+)/, async (ctx) => {
       
       if (game.isBlitz) {
         coinReward = BLITZ_CONFIG[game.blitzLevel]?.coin || coinReward * 2;
+        updateQuestProgress(ctx.from.id, 'blitz_win');
       }
+      
+      if (game.difficulty === 'expert') updateQuestProgress(ctx.from.id, 'expert_win');
+      updateQuestProgress(ctx.from.id, 'win');
+      updateQuestProgress(ctx.from.id, 'game_played');
       
       if (user.inventory?.double_reward > 0 && !game.doubleRewardActive) {
         game.doubleRewardActive = true;
@@ -1206,17 +1395,21 @@ bot.action(/items_(.+)/, async (ctx) => {
   await ctx.editMessageText(msg, { reply_markup: { inline_keyboard: keyboardButtons } });
 });
 
-// استفاده از آیتم‌ها
-async function handleItemUse(ctx, gameId, itemType, action) {
+async function handleItemUse(ctx, gameId, itemType, updateType) {
   const gameKey = `${ctx.chat.id}_${ctx.from.id}`;
   const game = games.get(gameKey);
+  const user = getUser(ctx.from.id);
   
-  if (!game || game.gameId !== gameId) {
-    await ctx.answerCbQuery('❌ بازی معتبر نیست!');
-    return;
-  }
+  if (!game || game.gameId !== gameId) return ctx.answerCbQuery('❌ بازی معتبر نیست!');
+  if (!game.alive) return ctx.answerCbQuery('❌ بازی فعال نیست');
+  if (game.userId !== ctx.from.id) return ctx.answerCbQuery('❌ این بازی مال تو نیست!');
+  if (user.inventory?.[itemType] <= 0) return ctx.answerCbQuery(`❌ ${itemType} نداری!`, true);
   
-  await action(ctx, game);
+  user.inventory[itemType]--;
+  updateUser(user);
+  updateQuestProgress(ctx.from.id, updateType);
+  
+  return true;
 }
 
 bot.action(/use_mine_detector_(.+)/, async (ctx) => {
@@ -1238,6 +1431,7 @@ bot.action(/use_mine_detector_(.+)/, async (ctx) => {
   
   user.inventory.mine_detector--;
   updateUser(user);
+  updateQuestProgress(ctx.from.id, 'mine_detector');
   
   const x = Math.floor(mineIdx / game.size);
   const y = mineIdx % game.size;
@@ -1265,6 +1459,7 @@ bot.action(/use_smart_hint_(.+)/, async (ctx) => {
   
   user.inventory.smart_hint--;
   updateUser(user);
+  updateQuestProgress(ctx.from.id, 'use_item');
   
   const x = Math.floor(hintIdx / game.size);
   const y = hintIdx % game.size;
@@ -1287,6 +1482,7 @@ bot.action(/use_time_freeze_(.+)/, async (ctx) => {
   
   user.inventory.time_freeze--;
   updateUser(user);
+  updateQuestProgress(ctx.from.id, 'use_item');
   game.freezeTime();
   
   await ctx.answerCbQuery('⏰ ۳۰ ثانیه به زمان اضافه شد!', true);
@@ -1307,6 +1503,7 @@ bot.action(/use_double_reward_(.+)/, async (ctx) => {
   user.inventory.double_reward--;
   game.doubleRewardActive = true;
   updateUser(user);
+  updateQuestProgress(ctx.from.id, 'use_item');
   
   await ctx.answerCbQuery('🔥 جایزه دوبرابر فعال شد! برد بعدی ×۲ سکه!', true);
   await ctx.editMessageText(`${game.isBlitz ? '⚡' : '💣'} ${DIFFICULTY[game.difficulty]?.name}\n🔥 جایزه دوبرابر فعال شد!\n${game.getStats()}`, renderGame(game, false));
@@ -1326,6 +1523,7 @@ bot.action(/use_shield_(.+)/, async (ctx) => {
   user.inventory.shield--;
   game.shieldActive = true;
   updateUser(user);
+  updateQuestProgress(ctx.from.id, 'use_item');
   
   await ctx.answerCbQuery('🛡️ سپر محافظ فعال شد! یک بار مرگ رو نجات میده!', true);
   await ctx.editMessageText(`${game.isBlitz ? '⚡' : '💣'} ${DIFFICULTY[game.difficulty]?.name}\n🛡️ سپر محافظ فعال شد!\n${game.getStats()}`, renderGame(game, false));
@@ -1343,7 +1541,7 @@ bot.action(/back_(.+)/, async (ctx) => {
   }
 });
 
-// ================== SHOP و بقیه منوها ==================
+// ================== SHOP MENU ==================
 bot.action('shop_menu', async (ctx) => {
   const user = getUser(ctx.from.id);
   let msg = '🛒 فروشگاه آیتم‌ها:\n━━━━━━━━━━━━━━━\n\n';
@@ -1450,7 +1648,7 @@ bot.action(/activate_theme_(.+)/, async (ctx) => {
 
 bot.action('wallet', async (ctx) => {
   const user = getUser(ctx.from.id);
-  await ctx.editMessageText(`💰 کیف پول شما\n\nسکه: ${user.coins} 🪙\n\n🎮 هر برد عادی: +${DIFFICULTY.easy.coin}-${DIFFICULTY.expert.coin} سکه\n⚡ هر برد بلیتز: +${BLITZ_CONFIG.easy.coin}-${BLITZ_CONFIG.expert.coin} سکه\n🏆 دستاوردها: سکه اضافه میدن\n🔥 استریک فعلی: ${user.currentStreak || 0}\n⭐ سطح: ${user.level}\n⚡ برد بلیتز: ${user.blitzWins || 0}`, {
+  await ctx.editMessageText(`💰 کیف پول شما\n\nسکه: ${user.coins} 🪙\n\n🎮 هر برد عادی: +${DIFFICULTY.easy.coin}-${DIFFICULTY.expert.coin} سکه\n⚡ هر برد بلیتز: +${BLITZ_CONFIG.easy.coin}-${BLITZ_CONFIG.expert.coin} سکه\n🏆 دستاوردها: سکه اضافه میدن\n🔥 استریک فعلی: ${user.currentStreak || 0}\n⭐ سطح: ${user.level}\n⚡ برد بلیتز: ${user.blitzWins || 0}\n📅 استریک روزانه: ${user.dailyStreak || 0} روز`, {
     reply_markup: { inline_keyboard: [[{ text: '🔙 برگشت', callback_data: 'main_menu', style: 'primary' }]] }
   });
 });
@@ -1487,7 +1685,8 @@ bot.action('my_stats', async (ctx) => {
     `⭐ سطح: ${user.level} | ${levelName}\n` +
     `✨ XP: ${user.xp} (${xpToNext > 0 ? `${xpToNext} XP تا سطح بعد` : 'حداکثر سطح'})\n` +
     `🏅 دستاوردها: ${user.achievements.length}/${Object.keys(ACHIEVEMENTS).length}\n` +
-    `🎨 تم فعلی: ${THEMES[user.theme].name}`,
+    `🎨 تم فعلی: ${THEMES[user.theme].name}\n` +
+    `📅 استریک روزانه: ${user.dailyStreak || 0} روز`,
     { reply_markup: { inline_keyboard: [[{ text: '🔙 برگشت', callback_data: 'main_menu', style: 'primary' }]] } }
   );
 });
@@ -1516,7 +1715,7 @@ bot.action('level_info', async (ctx) => {
 
 bot.action('help', async (ctx) => {
   await ctx.editMessageText(
-    `📖 **راهنمای v6.2**\n\n` +
+    `📖 **راهنمای v6.3**\n\n` +
     `🎯 **هدف:** همه سلول‌های بدون مین رو باز کن\n\n` +
     `🕹️ **حالت‌های بازی:**\n` +
     `• 🎮 حالت عادی: بازی کلاسیک بدون محدودیت زمان\n` +
@@ -1525,6 +1724,10 @@ bot.action('help', async (ctx) => {
     `• با هر حرکت درست، زمان اضافه میشه\n` +
     `• زمان تموم بشه = باخت\n` +
     `• جایزه و XP بیشتر\n\n` +
+    `📅 **ماموریت‌های روزانه:**\n` +
+    `• هر روز ۳ ماموریت جدید\n` +
+    `• با انجام ماموریت‌ها سکه و XP بگیر\n` +
+    `• استریک روزانه = پاداش بیشتر\n\n` +
     `🕹️ **کنترل‌ها:**\n` +
     `• کلیک عادی: باز کردن سلول\n` +
     `• حالت 🚩 Flag: پرچم گذاری روی مین\n` +
@@ -1558,6 +1761,7 @@ bot.action('leaderboard_menu', async (ctx) => {
         [{ text: '💰 ثروتمندترین‌ها', callback_data: 'lb_coins', style: 'success' }],
         [{ text: '✨ بالاترین سطح', callback_data: 'lb_level', style: 'success' }],
         [{ text: '⚡ سلطان بلیتز', callback_data: 'lb_blitz', style: 'danger' }],
+        [{ text: '📅 استریک روزانه', callback_data: 'lb_daily_streak', style: 'success' }],
         [{ text: '🔙 برگشت', callback_data: 'main_menu', style: 'primary' }]
       ]
     }
@@ -1585,12 +1789,13 @@ async function showLeaderboard(ctx, stat, title) {
   for (const user of topUsers) {
     let value = user[stat === 'score_all' ? 'total_score' : stat] || user[stat];
     if (stat === 'score_all') stat = 'total_score';
-    msg += `${rank}. ${user.name || 'کاربر'} — ${value} ${stat === 'level' ? 'سطح' : stat === 'blitz' ? 'برد بلیتز' : stat}\n`;
+    let displayName = stat === 'daily_streak' ? 'روز' : stat === 'level' ? 'سطح' : stat === 'blitz' ? 'برد بلیتز' : stat;
+    msg += `${rank}. ${user.name || 'کاربر'} — ${value} ${displayName}\n`;
     rank++;
   }
   const user = getUser(ctx.from.id);
   const userValue = user[stat === 'total_score' ? 'totalScore' : stat] || 0;
-  msg += `\n📊 شما: ${userValue} ${stat === 'level' ? 'سطح' : stat === 'blitz' ? 'برد بلیتز' : stat}`;
+  msg += `\n📊 شما: ${userValue} ${stat === 'level' ? 'سطح' : stat === 'blitz' ? 'برد بلیتز' : stat === 'daily_streak' ? 'روز' : stat}`;
   await ctx.editMessageText(msg, {
     reply_markup: { inline_keyboard: [[{ text: '🔙 برگشت', callback_data: 'leaderboard_menu', style: 'primary' }]] }
   });
@@ -1606,6 +1811,7 @@ bot.action('lb_score_weekly', async (ctx) => {
 bot.action('lb_coins', async (ctx) => showLeaderboard(ctx, 'coins', '💰 ثروتمندترین‌ها'));
 bot.action('lb_level', async (ctx) => showLeaderboard(ctx, 'level', '✨ بالاترین سطح'));
 bot.action('lb_blitz', async (ctx) => showLeaderboard(ctx, 'blitz', '⚡ سلطان بلیتز'));
+bot.action('lb_daily_streak', async (ctx) => showLeaderboard(ctx, 'daily_streak', '📅 استریک روزانه'));
 
 // ================== CLEANUP ==================
 setInterval(cleanupOldGames, 600000);
@@ -1619,7 +1825,7 @@ bot.catch((err, ctx) => {
 
 // ================== LAUNCH ==================
 bot.launch()
-  .then(() => console.log('🚀 Minesweeper PRO v6.2 Secure Running!'))
+  .then(() => console.log('🚀 Minesweeper PRO v6.3 Running!'))
   .catch(console.error);
 
 process.once('SIGINT', () => bot.stop('SIGINT'));
